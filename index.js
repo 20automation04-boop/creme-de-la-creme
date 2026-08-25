@@ -234,6 +234,43 @@ function verifyChakraSignature(req) {
   return crypto.timingSafeEqual(expectedBuf, gotBuf);
 }
 
+// ---- BASIC RATE LIMITING ----
+// Cheap, in-memory, no dependency. The signature check above is best-effort
+// (see note), so this is the real backstop against a spammy sender — or a
+// burst of forged requests — running up real Gemini/Chakra costs. Not meant
+// to handle legitimate high traffic gracefully, just to put a ceiling on
+// runaway cost. Bump these if this shop ever gets genuinely busy.
+const RATE_LIMIT_PER_SENDER = { max: 20, windowMs: 60 * 1000 };
+const RATE_LIMIT_GLOBAL = { max: 120, windowMs: 60 * 1000 };
+const rateBuckets = new Map(); // key -> { count, windowStart }
+
+function isRateLimited(key, { max, windowMs }) {
+  const now = Date.now();
+  const bucket = rateBuckets.get(key);
+  if (!bucket || now - bucket.windowStart >= windowMs) {
+    rateBuckets.set(key, { count: 1, windowStart: now });
+    return false;
+  }
+  bucket.count++;
+  return bucket.count > max;
+}
+
+// ---- PER-SENDER SESSION LOCK ----
+// Serializes message processing per sender so two near-simultaneous
+// messages from the SAME customer can't interleave against the same mutable
+// session object (e.g. one message's cart update getting lost to a race
+// with another, since the AI calls in between mean a single message's
+// processing can take several seconds). Different senders are completely
+// unaffected — each gets its own independent chain.
+const sessionLocks = new Map(); // from -> tail promise of the current chain
+
+function withSessionLock(key, fn) {
+  const prev = sessionLocks.get(key) || Promise.resolve();
+  const run = prev.then(fn, fn);
+  sessionLocks.set(key, run.catch(() => {}));
+  return run;
+}
+
 // ---- MENU DATA ----
 // Lives in menu-data.js so it stays in sync with the availability seed script.
 const MENU = require('./menu-data.js');
@@ -867,12 +904,36 @@ function orderResultText(result, session, lang) {
 
 // ---- MAIN WEBHOOK ----
 app.post('/whatsapp', async (req, res) => {
+  if (isRateLimited('__global__', RATE_LIMIT_GLOBAL)) {
+    console.warn('Global rate limit hit — dropping request.');
+    return res.sendStatus(200); // ack so Meta/Chakra doesn't retry, just don't process it
+  }
+
   const sigResult = verifyChakraSignature(req);
   if (sigResult === false) {
     console.warn('Webhook signature mismatch — rejecting request.');
     return res.sendStatus(403);
   }
 
+  // Cheap peek at the sender so we can rate-limit and lock BEFORE doing any
+  // real work. The full parse happens again below — deliberately kept
+  // separate from that logic so it stays untouched.
+  const peekEntry = req.body.entry && req.body.entry[0];
+  const peekChange = peekEntry && peekEntry.changes && peekEntry.changes[0];
+  const peekMessage = peekChange && peekChange.value && peekChange.value.messages && peekChange.value.messages[0];
+  const lockKey = peekMessage && peekMessage.from;
+
+  if (lockKey) {
+    if (isRateLimited(lockKey, RATE_LIMIT_PER_SENDER)) {
+      console.warn(`Rate limit hit for ${lockKey} — dropping request.`);
+      return res.sendStatus(200);
+    }
+    return withSessionLock(lockKey, () => processWhatsAppMessage(req, res));
+  }
+  return processWhatsAppMessage(req, res);
+});
+
+async function processWhatsAppMessage(req, res) {
   let from = null; // declared outside the try so the catch block can still use it
   try {
     // ---- Parse Meta Cloud API webhook format (Chakra pass-through) ----
@@ -1289,7 +1350,7 @@ app.post('/whatsapp', async (req, res) => {
       res.status(500).send('error');
     }
   }
-});
+}
 
 // Meta requires this GET endpoint for initial webhook verification when you
 // configure the webhook URL in the Chakra dashboard (if using the pass-through
