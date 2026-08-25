@@ -70,7 +70,7 @@ async function sendWhatsAppMessage(to, message) {
 // synchronously within the webhook response — every reply now uses the same
 // fire-and-forget pattern the proactive status-update code already used.
 function sendReply(res, to, textOrMessages) {
-  res.sendStatus(200);
+  if (!res.headersSent) res.sendStatus(200); // the webhook is usually already acked earlier — see app.post('/whatsapp')
   const messages = Array.isArray(textOrMessages) ? textOrMessages : [textOrMessages];
   (async () => {
     for (const m of messages.filter(Boolean)) {
@@ -234,12 +234,24 @@ function verifyChakraSignature(req) {
   return crypto.timingSafeEqual(expectedBuf, gotBuf);
 }
 
+// A real WhatsApp sender id is bare digits, no more than ~15 of them (E.164
+// max length). Reject anything else before it's ever used as a key below —
+// otherwise a forged payload with a fresh random "from" on every request
+// would dodge per-sender rate limiting entirely (each new key starts an
+// unthrottled fresh bucket) while still growing rateBuckets/sessionLocks/
+// sessions without bound.
+function isValidSenderId(from) {
+  return typeof from === 'string' && /^\d{5,15}$/.test(from);
+}
+
 // ---- BASIC RATE LIMITING ----
 // Cheap, in-memory, no dependency. The signature check above is best-effort
 // (see note), so this is the real backstop against a spammy sender — or a
 // burst of forged requests — running up real Gemini/Chakra costs. Not meant
 // to handle legitimate high traffic gracefully, just to put a ceiling on
-// runaway cost. Bump these if this shop ever gets genuinely busy.
+// runaway cost (it's a fixed-window counter, so a sender can burst up to
+// ~2x max right at a window boundary — acceptable for a cost ceiling, not
+// a precise guarantee). Bump these if this shop ever gets genuinely busy.
 const RATE_LIMIT_PER_SENDER = { max: 20, windowMs: 60 * 1000 };
 const RATE_LIMIT_GLOBAL = { max: 120, windowMs: 60 * 1000 };
 const rateBuckets = new Map(); // key -> { count, windowStart }
@@ -255,20 +267,63 @@ function isRateLimited(key, { max, windowMs }) {
   return bucket.count > max;
 }
 
+// Sweep stale buckets periodically so this doesn't grow for the life of the
+// process — same "just enough housekeeping" pattern as the availability/
+// order-status polling below. .unref() so it never keeps the process alive.
+setInterval(() => {
+  const now = Date.now();
+  const staleAfterMs = 5 * 60 * 1000; // well past either window above
+  for (const [key, bucket] of rateBuckets) {
+    if (now - bucket.windowStart > staleAfterMs) rateBuckets.delete(key);
+  }
+}, 5 * 60 * 1000).unref();
+
 // ---- PER-SENDER SESSION LOCK ----
 // Serializes message processing per sender so two near-simultaneous
 // messages from the SAME customer can't interleave against the same mutable
 // session object (e.g. one message's cart update getting lost to a race
 // with another, since the AI calls in between mean a single message's
 // processing can take several seconds). Different senders are completely
-// unaffected — each gets its own independent chain.
+// unaffected — each gets its own independent chain. Single-process only:
+// if this ever runs as more than one instance, each gets its own lock and
+// the guarantee above no longer holds across instances.
 const sessionLocks = new Map(); // from -> tail promise of the current chain
 
 function withSessionLock(key, fn) {
   const prev = sessionLocks.get(key) || Promise.resolve();
   const run = prev.then(fn, fn);
-  sessionLocks.set(key, run.catch(() => {}));
+  const tail = run.catch(() => {});
+  sessionLocks.set(key, tail);
+  // Self-clean once this sender goes idle — but only if nothing newer has
+  // taken over the slot in the meantime.
+  tail.finally(() => {
+    if (sessionLocks.get(key) === tail) sessionLocks.delete(key);
+  });
   return run;
+}
+
+// ---- INBOUND MESSAGE DEDUPLICATION ----
+// Meta/Chakra webhooks are at-least-once delivery — if our ack is slow (an
+// AI call, voice transcription, or a same-sender queue wait) the provider
+// can retry with the IDENTICAL payload. Without this, a retry is processed
+// as a brand-new message — e.g. doubling a cart addition, or worse at
+// checkout. Every WhatsApp message carries a unique id ("wamid"); track
+// ones already handled so a retry becomes a harmless no-op ack instead.
+const seenMessageIds = new Map(); // id -> timestamp first seen
+const SEEN_ID_TTL_MS = 10 * 60 * 1000; // comfortably longer than any realistic retry window
+
+function isDuplicateMessage(id) {
+  if (!id) return false; // nothing to key on — let it through rather than block real traffic
+  const now = Date.now();
+  if (seenMessageIds.size > 5000) {
+    for (const [k, t] of seenMessageIds) {
+      if (now - t > SEEN_ID_TTL_MS) seenMessageIds.delete(k);
+    }
+  }
+  const seenAt = seenMessageIds.get(id);
+  if (seenAt !== undefined && now - seenAt < SEEN_ID_TTL_MS) return true;
+  seenMessageIds.set(id, now);
+  return false;
 }
 
 // ---- MENU DATA ----
@@ -903,53 +958,66 @@ function orderResultText(result, session, lang) {
 }
 
 // ---- MAIN WEBHOOK ----
-app.post('/whatsapp', async (req, res) => {
-  if (isRateLimited('__global__', RATE_LIMIT_GLOBAL)) {
-    console.warn('Global rate limit hit — dropping request.');
-    return res.sendStatus(200); // ack so Meta/Chakra doesn't retry, just don't process it
-  }
+// Meta Cloud API webhook format (Chakra pass-through) — the single place
+// that knows this shape, parsed once per request. Returns null for a
+// bodyless/non-JSON POST (body-parser leaves req.body undefined for those —
+// verified against the installed body-parser version, not assumed) or any
+// payload that isn't an inbound message (status callbacks, etc).
+function extractInboundMessage(req) {
+  const body = req.body;
+  if (!body || typeof body !== 'object') return null;
+  const entry = body.entry && body.entry[0];
+  const change = entry && entry.changes && entry.changes[0];
+  const value = change && change.value;
+  return (value && value.messages && value.messages[0]) || null;
+}
 
+app.post('/whatsapp', async (req, res) => {
   const sigResult = verifyChakraSignature(req);
   if (sigResult === false) {
     console.warn('Webhook signature mismatch — rejecting request.');
     return res.sendStatus(403);
   }
 
-  // Cheap peek at the sender so we can rate-limit and lock BEFORE doing any
-  // real work. The full parse happens again below — deliberately kept
-  // separate from that logic so it stays untouched.
-  const peekEntry = req.body.entry && req.body.entry[0];
-  const peekChange = peekEntry && peekEntry.changes && peekEntry.changes[0];
-  const peekMessage = peekChange && peekChange.value && peekChange.value.messages && peekChange.value.messages[0];
-  const lockKey = peekMessage && peekMessage.from;
-
-  if (lockKey) {
-    if (isRateLimited(lockKey, RATE_LIMIT_PER_SENDER)) {
-      console.warn(`Rate limit hit for ${lockKey} — dropping request.`);
-      return res.sendStatus(200);
-    }
-    return withSessionLock(lockKey, () => processWhatsAppMessage(req, res));
+  const message = extractInboundMessage(req);
+  if (!message || !isValidSenderId(message.from)) {
+    // Not a real inbound customer message — bodyless ping, delivery-status
+    // event, template update, or a malformed/forged sender id. Ack and stop
+    // here, BEFORE touching either rate limiter, so the bot's own
+    // status-callback echo traffic (and forged junk) can't eat into the
+    // budget real customer messages depend on.
+    return res.sendStatus(200);
   }
-  return processWhatsAppMessage(req, res);
+  const from = message.from;
+
+  if (isDuplicateMessage(message.id)) {
+    console.warn(`Duplicate delivery for message ${message.id} from ${from} — acking without reprocessing.`);
+    return res.sendStatus(200);
+  }
+
+  if (isRateLimited('__global__', RATE_LIMIT_GLOBAL)) {
+    console.warn('Global rate limit hit — dropping request.');
+    return res.sendStatus(200);
+  }
+  if (isRateLimited(from, RATE_LIMIT_PER_SENDER)) {
+    console.warn(`Rate limit hit for ${from} — dropping request.`);
+    return res.sendStatus(200);
+  }
+
+  // Ack immediately. Everything past this point — AI calls, Sheets writes,
+  // the per-sender queue below — can legitimately take seconds, and making
+  // Meta/Chakra wait on that is exactly what risks the retry the dedup
+  // check above exists to make harmless. sendReply()'s own ack becomes a
+  // no-op once headers are already sent (see its headersSent guard).
+  res.sendStatus(200);
+  withSessionLock(from, () => processWhatsAppMessage(message, res)).catch(err => {
+    console.error('Unhandled error processing message:', err);
+  });
 });
 
-async function processWhatsAppMessage(req, res) {
-  let from = null; // declared outside the try so the catch block can still use it
+async function processWhatsAppMessage(message, res) {
+  const from = message.from; // bare digits with country code, e.g. "50161234567" — no '+', already validated above
   try {
-    // ---- Parse Meta Cloud API webhook format (Chakra pass-through) ----
-    const entry = req.body.entry && req.body.entry[0];
-    const change = entry && entry.changes && entry.changes[0];
-    const value = change && change.value;
-    const message = value && value.messages && value.messages[0];
-
-    if (!message) {
-      // Not an inbound message — could be a delivery-status event, template
-      // update, etc. Nothing for the bot to do, just ack so it isn't retried.
-      return res.sendStatus(200);
-    }
-
-    from = message.from; // bare digits with country code, e.g. "50161234567" — no '+'
-
     const session = getSession(from);
     const knownLang = session.language;
     const bilingual = (en, es) => (knownLang === 'es' ? es : knownLang === 'en' ? en : `${en} / ${es}`);
@@ -1310,6 +1378,14 @@ async function processWhatsAppMessage(req, res) {
             });
           }
 
+          // logOrderToSheets keeps reading from this `session` object across
+          // its own internal awaits, which can still be in flight after the
+          // lock for this sender has released. That's only safe because the
+          // next line REPLACES sessions[from] with a new object rather than
+          // mutating this one in place — the in-flight background call keeps
+          // its own reference, untouched by whatever the next message does.
+          // If this reset is ever changed to mutate in place (e.g.
+          // Object.assign(session, newSession())), that safety goes away.
           sessions[from] = newSession();
         } else if (msg === 'no' || msg === 'cancel' || msg === 'cancelar') {
           sessions[from] = newSession();
@@ -1339,15 +1415,13 @@ async function processWhatsAppMessage(req, res) {
     sendReply(res, from, reply);
   } catch (err) {
     console.error('Webhook error:', err);
+    // The webhook itself was already acked by the caller before this
+    // function was ever invoked — this is just the best-effort customer
+    // reply. sendReply's headersSent guard makes it safe either way.
     try {
-      if (from) {
-        sendReply(res, from, "Sorry, something went wrong on our end — please try again in a moment. 🙏 / Lo sentimos, hubo un error — intenta de nuevo en un momento. 🙏");
-      } else {
-        // Couldn't even identify the sender — just ack so Chakra/Meta doesn't retry.
-        res.sendStatus(200);
-      }
+      sendReply(res, from, "Sorry, something went wrong on our end — please try again in a moment. 🙏 / Lo sentimos, hubo un error — intenta de nuevo en un momento. 🙏");
     } catch (e2) {
-      res.status(500).send('error');
+      console.error('Also failed to send the error reply:', e2);
     }
   }
 }
