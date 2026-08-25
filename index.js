@@ -88,7 +88,7 @@ function sendReply(res, to, textOrMessages) {
 // code, NO '+' and NO 'whatsapp:' prefix (e.g. '5016256563').
 // Empty list = nothing gets sent.
 const DRIVER_NUMBERS = [
-  // '5016256563',
+  '5016162492',
 ];
 
 async function notifyDriver(orderNumber, session) {
@@ -350,7 +350,7 @@ const SHOP_INFO = {
   deliveryTimeEs: '30-45 minutos',
   paymentEn: 'Cash only or online, including cash on delivery.',
   paymentEs: 'Solo efectivo o enlinea, incluso contra entrega.',
-  phone: '911',
+  phone: '+501 616-2492',
 };
 
 // ---- STRUCTURED HOURS (for the open/closed check) ----
