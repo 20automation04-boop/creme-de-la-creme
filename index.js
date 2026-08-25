@@ -413,7 +413,17 @@ async function pollOrderStatus() {
       const lang = language === 'es' ? 'es' : 'en';
       const buildMessage = STATUS_MESSAGES[lang][status];
       const phone = (phoneCell || '').replace(/^\+/, ''); // strip '+' — Chakra/Meta wants bare digits
-      if (!buildMessage || !phone) continue; // unrecognized status text, or no phone on file — skip silently
+
+      if (!buildMessage) {
+        // Status text doesn't exactly match one of STATUS_MESSAGES's keys
+        // (case-sensitive) — likely a typo in the sheet's status column, or
+        // it's free-text rather than a locked dropdown. Worth knowing about
+        // even though there's nothing to send: the customer silently never
+        // gets notified otherwise, with no other signal that anything's off.
+        console.warn(`Order #${orderNumber}: status changed to "${status}" but no message template matches it (check for a typo/case mismatch in the Manager sheet) — customer not notified.`);
+        continue;
+      }
+      if (!phone) continue; // no phone on file for this order — nothing to notify, this is expected
 
       try {
         await sendWhatsAppMessage(phone, buildMessage(orderNumber));
