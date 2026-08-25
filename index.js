@@ -769,17 +769,35 @@ function findDirectMatches(rawMsg) {
   });
   candidates.sort((a, b) => b.nameLower.length - a.nameLower.length);
 
+  // Longest names are matched first so e.g. "Strawberry Cheesecake" claims
+  // its own text before plain "Strawberry" is considered — but a shorter
+  // name should only be skipped when it overlaps the SAME text span a
+  // longer match already claimed, not just because its name happens to be
+  // a substring of some longer name that matched ELSEWHERE in the message.
+  // (Previously this compared names only, so "1 strawberry cheesecake and
+  // 1 strawberry" silently dropped the second item.) Track claimed
+  // character ranges and require an unclaimed occurrence instead.
+  const claimedRanges = [];
   const matched = [];
   for (const c of candidates) {
-    if (!lower.includes(c.nameLower)) continue;
-    const isSubsumed = matched.some(m => m.nameLower.includes(c.nameLower));
-    if (isSubsumed) continue;
-    matched.push(c);
+    let searchFrom = 0;
+    let matchIndex = -1;
+    while (true) {
+      const idx = lower.indexOf(c.nameLower, searchFrom);
+      if (idx === -1) break;
+      const end = idx + c.nameLower.length;
+      const overlapsClaimed = claimedRanges.some(([s, e]) => idx < e && end > s);
+      if (!overlapsClaimed) { matchIndex = idx; break; }
+      searchFrom = idx + 1;
+    }
+    if (matchIndex === -1) continue;
+    claimedRanges.push([matchIndex, matchIndex + c.nameLower.length]);
+    matched.push({ ...c, matchIndex });
   }
+  matched.sort((a, b) => a.matchIndex - b.matchIndex); // report in the order they appeared
 
   return matched.map(c => {
-    const idx = lower.indexOf(c.nameLower);
-    const before = lower.slice(Math.max(0, idx - 6), idx);
+    const before = lower.slice(Math.max(0, c.matchIndex - 6), c.matchIndex);
     const digitMatch = before.match(/(\d+)\s*$/);
     const qty = digitMatch ? parseInt(digitMatch[1], 10) : 1;
     return { categoryId: c.categoryId, itemIndex: c.itemIndex, qty, size: 'regular' };
