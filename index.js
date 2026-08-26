@@ -20,6 +20,16 @@ const CHAKRA_PLUGIN_ID = process.env.CHAKRA_PLUGIN_ID;
 const CHAKRA_PHONE_NUMBER_ID = process.env.CHAKRA_PHONE_NUMBER_ID;
 const CHAKRA_API_VERSION = process.env.CHAKRA_API_VERSION || 'v24.0';
 
+// ---- REPLAY-TEST DRY RUN ----
+// Set only by test/replay.test.js, BEFORE requiring this file — never by
+// production config. When on, every real outbound side effect (WhatsApp
+// sends, Sheets reads/writes) is captured/stubbed instead of hitting the
+// network, so replay tests can safely require() this module even with real
+// production credentials sitting in .env. See sendWhatsAppMessage, markAsRead,
+// and the `sheets` stub-install below.
+const BOT_DRY_RUN = process.env.BOT_DRY_RUN === '1';
+const dryRunSent = []; // { to, message } — inspected by replay tests, cleared per-test
+
 function chakraSendUrl() {
   return `https://api.chakrahq.com/v1/ext/plugin/whatsapp/${CHAKRA_PLUGIN_ID}/api/${CHAKRA_API_VERSION}/${CHAKRA_PHONE_NUMBER_ID}/messages`;
 }
@@ -47,6 +57,10 @@ function postToChakra(body, timeoutMs) {
 }
 
 async function sendWhatsAppMessage(to, message) {
+  if (BOT_DRY_RUN) {
+    dryRunSent.push({ to, message });
+    return { dryRun: true };
+  }
   if (!CHAKRA_API_KEY || !CHAKRA_PLUGIN_ID || !CHAKRA_PHONE_NUMBER_ID) {
     console.error('Chakra credentials not fully configured — cannot send message.');
     return;
@@ -107,6 +121,7 @@ async function sendWhatsAppMessage(to, message) {
 // Best-effort only: fire-and-forget from the caller, failures are just
 // logged since this is cosmetic and must never block or break a reply.
 async function markAsRead(messageId) {
+  if (BOT_DRY_RUN) return;
   if (!CHAKRA_API_KEY || !CHAKRA_PLUGIN_ID || !CHAKRA_PHONE_NUMBER_ID || !messageId) return;
   try {
     const res = await postToChakra({
@@ -129,30 +144,36 @@ async function markAsRead(messageId) {
 // asynchronous API calls. Unlike Twilio's TwiML, there is no way to reply
 // synchronously within the webhook response — every reply now uses the same
 // fire-and-forget pattern the proactive status-update code already used.
-function sendReply(res, to, textOrMessages) {
+// `async` (not fire-and-forget) so the caller's returned promise only
+// resolves once every send has actually gone out — withSessionLock's
+// per-sender chain relies on that to keep two rapid messages' ACTUAL sends
+// in order, not just their session mutations (a plain returned promise from
+// an unawaited IIFE used to let the lock release before the sends below
+// even started). The HTTP ack above still happens synchronously first, so
+// this doesn't slow down the webhook response — Chakra/Meta never wait on
+// this loop, only in-process callers (and the replay-test harness) do.
+async function sendReply(res, to, textOrMessages) {
   if (process.env.DEBUG_REPLIES) console.log(`REPLY >>> to ${to}:`, JSON.stringify(textOrMessages));
   pushTranscript(to, 'bot', replySummaryText(textOrMessages));
   if (!res.headersSent) res.sendStatus(200); // the webhook is usually already acked earlier — see app.post('/whatsapp')
   const messages = Array.isArray(textOrMessages) ? textOrMessages : [textOrMessages];
-  (async () => {
-    for (const m of messages.filter(Boolean)) {
-      try {
-        await sendWhatsAppMessage(to, m);
-      } catch (err) {
-        console.error(`Failed to send WhatsApp message to ${to}:`, err.message || err);
-        // Interactive (buttons/list) messages carry a plain-text `fallback` —
-        // if Chakra/Meta rejects the interactive send for any reason, the
-        // customer still gets a usable menu instead of silence.
-        if (m && typeof m === 'object' && m.fallback) {
-          try {
-            await sendWhatsAppMessage(to, m.fallback);
-          } catch (err2) {
-            console.error(`Fallback send also failed for ${to}:`, err2.message || err2);
-          }
+  for (const m of messages.filter(Boolean)) {
+    try {
+      await sendWhatsAppMessage(to, m);
+    } catch (err) {
+      console.error(`Failed to send WhatsApp message to ${to}:`, err.message || err);
+      // Interactive (buttons/list) messages carry a plain-text `fallback` —
+      // if Chakra/Meta rejects the interactive send for any reason, the
+      // customer still gets a usable menu instead of silence.
+      if (m && typeof m === 'object' && m.fallback) {
+        try {
+          await sendWhatsAppMessage(to, m.fallback);
+        } catch (err2) {
+          console.error(`Fallback send also failed for ${to}:`, err2.message || err2);
         }
       }
     }
-  })();
+  }
 }
 
 // ---- DELIVERY DRIVER NOTIFICATION ----
@@ -203,6 +224,91 @@ function notifyAllDrivers(message) {
 function notifyOwners(message) {
   return broadcastTo(OWNER_NUMBERS, message);
 }
+
+// ---- ERROR ALERTING ----
+// Best-effort "something is broken and nobody's watching" channel — reuses
+// the exact WhatsApp path the owner already gets SOLDOUT/order alerts on,
+// so there's no new channel to configure. Rate-limited per `tag` (one alert
+// per tag per ALERT_COOLDOWN_MS) so a sustained failure — Sheets down for
+// an hour, say — sends one ping, not one per request. Callers pick the tag:
+// a fixed string for "this whole class of thing is broken" (e.g. 'crash'),
+// or a per-order tag (e.g. `sheets-log-${orderNumber}`) when EVERY instance
+// matters because each one is a potentially lost order.
+// Known limitation, not solved here: if Chakra/WhatsApp itself is the thing
+// that's down, this can't get through either — closing that needs an
+// external watchdog (e.g. a free uptime monitor hitting GET /), which needs
+// a third-party account this code can't create on its own.
+const lastAlertSentAt = new Map(); // tag -> timestamp
+const ALERT_COOLDOWN_MS = 15 * 60 * 1000;
+
+async function alertOwner(tag, message) {
+  console.error(`[ALERT:${tag}] ${message}`); // always logged, regardless of whether the WhatsApp send below succeeds or is on cooldown
+  const last = lastAlertSentAt.get(tag);
+  if (last !== undefined && Date.now() - last < ALERT_COOLDOWN_MS) return;
+  lastAlertSentAt.set(tag, Date.now());
+  const text = `🚨 ${message}`;
+  // Sent per-number with its own retry (NOT via notifyOwners/broadcastTo,
+  // which deliberately swallow per-number failures and never reject — fine
+  // for a routine broadcast, but this is the one send where a transient
+  // failure is worth one retry rather than silently giving up).
+  for (const number of OWNER_NUMBERS) {
+    try {
+      await sendWhatsAppMessage(number, text);
+    } catch (err) {
+      console.error(`alertOwner first attempt failed for ${number} (tag "${tag}"):`, err.message || err);
+      await new Promise(r => setTimeout(r, 3000));
+      try {
+        await sendWhatsAppMessage(number, text);
+      } catch (err2) {
+        console.error(`alertOwner retry also failed for ${number} (tag "${tag}"):`, err2.message || err2);
+      }
+    }
+  }
+}
+
+// For the periodic background jobs (refreshMenuFromSheet, pollOrderStatus,
+// etc.) — those already fail open (log and keep using stale in-memory data)
+// on a SINGLE bad poll, which is the right call for one transient blip. But
+// sustained failure (Sheets down for an hour) previously had no signal
+// beyond a log line nobody reads. jobFailed()/jobSucceeded() track
+// consecutive failures per job name and alert once sustained failure is
+// confirmed (3 in a row) rather than on the first blip; a single success
+// resets the counter.
+const consecutiveJobFailures = new Map(); // job name -> count
+const JOB_ALERT_THRESHOLD = 3;
+
+function jobFailed(name, err) {
+  const count = (consecutiveJobFailures.get(name) || 0) + 1;
+  consecutiveJobFailures.set(name, count);
+  if (count >= JOB_ALERT_THRESHOLD) {
+    alertOwner(`job-${name}`, `Background job "${name}" has failed ${count} times in a row (still running on stale data): ${err.message || err}`);
+  }
+}
+
+function jobSucceeded(name) {
+  consecutiveJobFailures.delete(name);
+}
+
+// Last-resort safety net for anything that slips past the try/catch blocks
+// already covering the webhook route and the periodic jobs. Doesn't replace
+// those — it's what catches a genuine bug in code THIS session didn't
+// anticipate needing a try/catch.
+process.on('uncaughtException', (err) => {
+  console.error('Uncaught exception — process will exit so Railway restarts it:', err);
+  // Fire-and-forget with a short grace period rather than awaited: an
+  // uncaught exception means something is broken in a way this process
+  // shouldn't keep running with, so exiting promptly matters more than
+  // guaranteeing the alert lands. alertOwner still gets a moment to try.
+  alertOwner('crash', `Bot crashed with an uncaught exception and is restarting: ${err.message || err}`)
+    .finally(() => process.exit(1));
+  setTimeout(() => process.exit(1), 5000).unref(); // hard stop if the alert hangs
+});
+
+process.on('unhandledRejection', (reason) => {
+  const err = reason instanceof Error ? reason : new Error(String(reason));
+  console.error('Unhandled promise rejection:', err);
+  alertOwner('rejection', `Bot hit an unhandled promise rejection (still running): ${err.message || err}`);
+});
 
 // Dash-prefixed "- item x2 - $14.00" cart lines, the staff-facing format
 // used in both the delivery driver alert and the pickup owner alert below —
@@ -262,6 +368,16 @@ const sheetsAuth = new google.auth.JWT({
   scopes: ['https://www.googleapis.com/auth/spreadsheets'],
 });
 const sheets = google.sheets({ version: 'v4', auth: sheetsAuth });
+
+// Replay tests never touch the real spreadsheet, even if real credentials
+// are sitting in .env — every read comes back empty and every write is a
+// silent no-op. This means replay tests exercise the FSM/state-machine
+// layer only, not real Sheets integration (that's covered by this project's
+// existing live-smoke-test practice instead).
+if (BOT_DRY_RUN) {
+  sheets.spreadsheets.values.get = async () => ({ data: { values: [] } });
+  sheets.spreadsheets.values.update = async () => ({ data: {} });
+}
 
 // ---- OWNER COMMANDS ----
 // Text these from a number in OWNER_NUMBERS (bare digits, no '+') to
@@ -401,6 +517,13 @@ async function logOrderToSheets(orderNumber, session, from) {
     lastKnownStatus.set(`${orderNumber}|${timestamp}`, 'Confirmed');
   } catch (err) {
     console.error('Google Sheets log error:', err);
+    // The customer was already told "order confirmed" by the time this
+    // runs (see the 'confirm' step — this call is fire-and-forget on
+    // purpose so a slow Sheets call never delays that reply). If THIS
+    // fails, the order may exist nowhere staff can see it except whatever
+    // driver/owner WhatsApp alert fired separately — worth a real alert,
+    // not just a log line nobody's watching.
+    alertOwner(`sheets-log-${orderNumber}`, `Order #${orderNumber} was confirmed to the customer but FAILED to log to the Manager/Kitchen sheet: ${err.message || err}`);
   }
 }
 
@@ -804,8 +927,10 @@ async function refreshMenuFromSheet() {
     // never reach here, so both sold-out state AND prices fail open
     // (keep whatever was already in memory) rather than resetting to blank.
     soldOutIds = applyMenuSheetRows(res.data.values || []);
+    jobSucceeded('refreshMenuFromSheet');
   } catch (err) {
     console.error('Menu sheet refresh failed (keeping previous prices/availability):', err.message || err);
+    jobFailed('refreshMenuFromSheet', err);
   }
 }
 
@@ -833,10 +958,12 @@ async function refreshCustomerProfiles() {
       next[phone] = { savedAddress: savedAddress || '', notes: notes || '', updatedAt: updatedAt || '' };
     }
     customerProfiles = next;
+    jobSucceeded('refreshCustomerProfiles');
   } catch (err) {
     // Fail open — most likely the Customers tab hasn't been created yet
     // (run seed-customers.js), or a transient Sheets error either way.
     console.error('Customer profile refresh failed (keeping previous profiles):', err.message || err);
+    jobFailed('refreshCustomerProfiles', err);
   }
 }
 
@@ -887,6 +1014,7 @@ async function pollOrderStatus() {
       range: 'Manager!A2:H',
     }), 8000);
     const rows = res.data.values || [];
+    jobSucceeded('pollOrderStatus');
 
     if (!statusPollingInitialized) {
       rows.forEach(row => {
@@ -945,6 +1073,7 @@ async function pollOrderStatus() {
     }
   } catch (err) {
     console.error('Order status poll failed:', err.message || err);
+    jobFailed('pollOrderStatus', err);
   }
 }
 
@@ -2762,10 +2891,12 @@ async function processWhatsAppMessage(message, res) {
           if (session.mode === 'delivery') {
             notifyDriver(orderNumber, session, from).catch(err => {
               console.error('Background driver notification failed:', err);
+              alertOwner(`driver-notify-${orderNumber}`, `Order #${orderNumber} (delivery) confirmed but the driver notification FAILED to send: ${err.message || err}`);
             });
           } else {
             notifyOwnerOfPickupOrder(orderNumber, session, from).catch(err => {
               console.error('Background pickup-order notification failed:', err);
+              alertOwner(`pickup-notify-${orderNumber}`, `Order #${orderNumber} (pickup) confirmed but the staff notification FAILED to send: ${err.message || err}`);
             });
           }
 
@@ -2853,14 +2984,18 @@ async function processWhatsAppMessage(message, res) {
       }
     }
 
-    sendReply(res, from, reply);
+    return sendReply(res, from, reply);
   } catch (err) {
     console.error('Webhook error:', err);
     // The webhook itself was already acked by the caller before this
     // function was ever invoked — this is just the best-effort customer
-    // reply. sendReply's headersSent guard makes it safe either way.
+    // reply. sendReply's headersSent guard makes it safe either way. Now
+    // that sendReply is a real async function (see its definition), this
+    // is awaited so the returned promise — which withSessionLock and the
+    // replay-test harness both rely on to know processing has actually
+    // finished — doesn't resolve before this last-resort reply goes out.
     try {
-      sendReply(res, from, "Sorry, something went wrong on our end — please try again in a moment. 🙏 / Lo sentimos, hubo un error — intenta de nuevo en un momento. 🙏");
+      return await sendReply(res, from, "Sorry, something went wrong on our end — please try again in a moment. 🙏 / Lo sentimos, hubo un error — intenta de nuevo en un momento. 🙏");
     } catch (e2) {
       console.error('Also failed to send the error reply:', e2);
     }
@@ -2887,14 +3022,29 @@ app.get('/', (req, res) => {
   res.send('WhatsApp bot is running.');
 });
 
-const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => {
-  console.log(`Server running on port ${PORT}`);
-  refreshMenuFromSheet(); // load once at startup so it's not empty for the first 2 min
-  setInterval(refreshMenuFromSheet, 2 * 60 * 1000);
-  pollOrderStatus(); // silent baseline pass — establishes "current" status without notifying
-  setInterval(pollOrderStatus, 60 * 1000);
-  setInterval(sweepIdleSessions, 30 * 1000);
-  refreshCustomerProfiles(); // load once at startup; changes rarely so a slower refresh than availability is fine
-  setInterval(refreshCustomerProfiles, 5 * 60 * 1000);
-});
+// Guarded so require()'ing this file (the replay-test harness does exactly
+// that) never starts a real server, hits the network, or schedules timers —
+// only `node index.js` (require.main === module) boots the live bot.
+if (require.main === module) {
+  const PORT = process.env.PORT || 3000;
+  app.listen(PORT, () => {
+    console.log(`Server running on port ${PORT}`);
+    // Doubles as the practical "did the bot just crash-restart" signal in
+    // production — the only OTHER reason this process restarts is a manual
+    // deploy, which is a low-cost false positive to accept in exchange for
+    // otherwise-silent crashes (see the crash/uncaughtException handlers
+    // below) getting noticed within minutes instead of hours.
+    alertOwner('boot', `🤖 Bot started (or restarted) at ${new Date().toLocaleString('en-US', { timeZone: 'America/Belize' })}.`);
+    refreshMenuFromSheet(); // load once at startup so it's not empty for the first 2 min
+    setInterval(refreshMenuFromSheet, 2 * 60 * 1000);
+    pollOrderStatus(); // silent baseline pass — establishes "current" status without notifying
+    setInterval(pollOrderStatus, 60 * 1000);
+    setInterval(sweepIdleSessions, 30 * 1000);
+    refreshCustomerProfiles(); // load once at startup; changes rarely so a slower refresh than availability is fine
+    setInterval(refreshCustomerProfiles, 5 * 60 * 1000);
+  });
+}
+
+// For the replay-test harness (test/replay.test.js) only — production never
+// requires this file as a module, so these exports are inert otherwise.
+module.exports = { app, processWhatsAppMessage, dryRunSent, sessions, lastOrders, savedCarts, cartTotal, OWNER_NUMBERS, soldOutIds, sweepIdleSessions, replySummaryText };
