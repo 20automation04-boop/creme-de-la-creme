@@ -200,6 +200,52 @@ const sheetsAuth = new google.auth.JWT({
 });
 const sheets = google.sheets({ version: 'v4', auth: sheetsAuth });
 
+// ---- OWNER COMMANDS ----
+// Text these from a number in OWNER_NUMBERS (bare digits, no '+') to
+// control the bot without opening the Sheet or redeploying:
+//   pause orders          - stop taking new checkouts until "resume orders"
+//   resume orders
+//   soldout <item name>   - mark an item sold out (partial name OK)
+//   instock <item name>   - mark it back in stock (also accepts "available")
+//   queue                 - how many orders are open right now, by status
+//   stats                 - all-time top items/peak hour + since-restart
+//                            funnel counts (language picked, checkout
+//                            started, carts abandoned)
+// A deliberately separate list from DRIVER_NUMBERS, even though it's the
+// same number today — these are different concepts (a driver shouldn't
+// necessarily be able to pause the whole shop) and DRIVER_NUMBERS could
+// grow a genuinely different number later without silently also granting
+// owner powers to whoever that is.
+const OWNER_NUMBERS = [
+  '5016162492',
+];
+
+function isOwner(from) {
+  return OWNER_NUMBERS.includes(from);
+}
+
+// In-memory only, by design — a deliberate "stop the queue" the owner
+// toggles for the rest of THIS process's life (e.g. kitchen slammed),
+// distinct from SHOP_HOURS/isShopOpen() (a schedule) or a sold-out item.
+// Resets to false on restart/redeploy — the owner should re-check the
+// state after a deploy rather than have a pause silently persist forever.
+let ordersPaused = false;
+
+// ---- FUNNEL COUNTERS (lightweight, in-memory, since server start) ----
+// Deliberately NOT Sheets-backed — logging every step transition to a
+// Sheet would mean a write (or more) per customer message, which risks
+// hitting Sheets API rate limits and adds latency/cost to the request path
+// exactly where this file's existing comments repeatedly warn against
+// doing that. These are just tallies, exposed via the owner STATS command;
+// "peak hours"/"top items" are computed on demand FROM the Manager sheet
+// instead (that data already exists there for every confirmed order — no
+// new instrumentation needed for that half). Resets on restart/redeploy.
+const funnelCounters = {
+  languageSelected: 0,
+  checkoutStarted: 0,
+  cartAbandoned: 0,
+};
+
 // Only these statuses trigger a customer notification. "Confirmed" is
 // skipped on purpose — the customer already got that message right when
 // they placed the order.
@@ -245,38 +291,46 @@ async function logOrderToSheets(orderNumber, session, from) {
   const phoneForSheet = `'+${from || ''}`;
 
   try {
-    // Explicitly find the next empty row instead of using values.append(),
-    // which tries to auto-detect the "table" boundaries and can misplace
-    // rows when a sheet has mixed row widths (older rows only reach column F,
-    // newer ones reach H) combined with dropdown validation further down the
-    // column — exactly what caused rows to land at column H instead of A.
-    const managerRows = await withTimeout(sheets.spreadsheets.values.get({
-      spreadsheetId: process.env.GOOGLE_SHEETS_ID,
-      range: 'Manager!A:A',
-    }), 6000);
-    const managerNextRow = (managerRows.data.values || []).length + 1;
+    // Serialized against every OTHER order's logging call, not just this
+    // sender's own messages (withSessionLock's per-sender chain doesn't
+    // help here — two DIFFERENT customers confirming near-simultaneously
+    // would each read "next row = N" before either had written, and one
+    // order's row would silently clobber the other's). Explicitly finding
+    // the next empty row (rather than values.append(), which tries to
+    // auto-detect the "table" boundaries and can misplace rows when a
+    // sheet has mixed row widths combined with dropdown validation further
+    // down the column — exactly what caused rows to land at column H
+    // instead of A) is what makes this read-then-write racy in the first
+    // place, hence the lock.
+    await withSessionLock('__sheets_manager_kitchen_write__', async () => {
+      const managerRows = await withTimeout(sheets.spreadsheets.values.get({
+        spreadsheetId: process.env.GOOGLE_SHEETS_ID,
+        range: 'Manager!A:A',
+      }), 6000);
+      const managerNextRow = (managerRows.data.values || []).length + 1;
 
-    await withTimeout(sheets.spreadsheets.values.update({
-      spreadsheetId: process.env.GOOGLE_SHEETS_ID,
-      range: `Manager!A${managerNextRow}:H${managerNextRow}`,
-      valueInputOption: 'USER_ENTERED',
-      requestBody: { values: [[orderNumber, timestamp, itemsWithPrice, total, modeText, session.language, phoneForSheet, 'Confirmed']] },
-    }), 6000);
+      await withTimeout(sheets.spreadsheets.values.update({
+        spreadsheetId: process.env.GOOGLE_SHEETS_ID,
+        range: `Manager!A${managerNextRow}:H${managerNextRow}`,
+        valueInputOption: 'USER_ENTERED',
+        requestBody: { values: [[orderNumber, timestamp, itemsWithPrice, total, modeText, session.language, phoneForSheet, 'Confirmed']] },
+      }), 6000);
 
-    const kitchenRows = await withTimeout(sheets.spreadsheets.values.get({
-      spreadsheetId: process.env.GOOGLE_SHEETS_ID,
-      range: 'Kitchen!A:A',
-    }), 6000);
-    const kitchenNextRow = (kitchenRows.data.values || []).length + 1;
+      const kitchenRows = await withTimeout(sheets.spreadsheets.values.get({
+        spreadsheetId: process.env.GOOGLE_SHEETS_ID,
+        range: 'Kitchen!A:A',
+      }), 6000);
+      const kitchenNextRow = (kitchenRows.data.values || []).length + 1;
 
-    await withTimeout(sheets.spreadsheets.values.update({
-      spreadsheetId: process.env.GOOGLE_SHEETS_ID,
-      range: `Kitchen!A${kitchenNextRow}:D${kitchenNextRow}`,
-      valueInputOption: 'USER_ENTERED',
-      requestBody: { values: [[orderNumber, timestamp, itemsNoPrice, modeText]] },
-    }), 6000);
+      await withTimeout(sheets.spreadsheets.values.update({
+        spreadsheetId: process.env.GOOGLE_SHEETS_ID,
+        range: `Kitchen!A${kitchenNextRow}:D${kitchenNextRow}`,
+        valueInputOption: 'USER_ENTERED',
+        requestBody: { values: [[orderNumber, timestamp, itemsNoPrice, modeText]] },
+      }), 6000);
 
-    console.log(`Order #${orderNumber} logged to Sheets ✅ (Manager row ${managerNextRow}, Kitchen row ${kitchenNextRow})`);
+      console.log(`Order #${orderNumber} logged to Sheets ✅ (Manager row ${managerNextRow}, Kitchen row ${kitchenNextRow})`);
+    });
     // So the status poller doesn't treat this brand-new "Confirmed" row as a
     // change to notify about the next time it runs.
     lastKnownStatus.set(String(orderNumber), 'Confirmed');
@@ -313,6 +367,73 @@ async function cancelOrderInSheet(orderNumber, from) {
     }
   }
   return false;
+}
+
+// Owner-facing QUEUE command: how many orders are still open (i.e. not yet
+// Completed or Cancelled), broken down by status.
+async function getQueueSummary() {
+  const res = await withTimeout(sheets.spreadsheets.values.get({
+    spreadsheetId: process.env.GOOGLE_SHEETS_ID,
+    range: 'Manager!A2:H',
+  }), 8000);
+  const rows = res.data.values || [];
+  const counts = {};
+  let total = 0;
+  for (const row of rows) {
+    const orderNumber = row[0];
+    if (!orderNumber) continue;
+    const status = (row[7] || 'Confirmed').trim();
+    if (status === 'Completed' || status === 'Cancelled') continue;
+    counts[status] = (counts[status] || 0) + 1;
+    total++;
+  }
+  return { total, counts };
+}
+
+// Owner-facing STATS command. Top items and peak hour are computed on
+// demand straight from the Manager sheet (that data already exists there
+// for every confirmed order — no new write instrumentation needed for it);
+// funnel counters are the in-memory tallies from funnelCounters instead,
+// since THAT data (language picked but never checked out, etc.) has no
+// other home. `itemsWithPrice` cells look like "Vanilla Bean x2 - $14.00;
+// Coffee x1 - $7.00" — stripping back to bare item names for the tally.
+async function getOrderStats() {
+  const res = await withTimeout(sheets.spreadsheets.values.get({
+    spreadsheetId: process.env.GOOGLE_SHEETS_ID,
+    range: 'Manager!A2:H',
+  }), 8000);
+  const rows = res.data.values || [];
+  const itemCounts = {};
+  const hourCounts = {};
+  let confirmedCount = 0;
+
+  for (const row of rows) {
+    const [orderNumber, timestamp, itemsWithPrice] = row;
+    if (!orderNumber) continue;
+    confirmedCount++;
+
+    (itemsWithPrice || '').split(';').forEach(segment => {
+      const match = segment.match(/^\s*(.+?)\s*x\d+/);
+      if (!match) return;
+      const name = match[1].replace(/\s*\[.*\]\s*$/, '').trim();
+      if (name) itemCounts[name] = (itemCounts[name] || 0) + 1;
+    });
+
+    // timestamp was written via toLocaleString('en-US', {dateStyle:'short',
+    // timeStyle:'short'}) — e.g. "8/26/26, 2:30 PM". Best-effort parse; a
+    // row that doesn't match this shape just doesn't count toward hours.
+    const hourMatch = (timestamp || '').match(/(\d{1,2}):\d{2}\s*(AM|PM)/i);
+    if (hourMatch) {
+      let hour = parseInt(hourMatch[1], 10) % 12;
+      if (hourMatch[2].toUpperCase() === 'PM') hour += 12;
+      hourCounts[hour] = (hourCounts[hour] || 0) + 1;
+    }
+  }
+
+  const topItems = Object.entries(itemCounts).sort((a, b) => b[1] - a[1]).slice(0, 5);
+  const peakHourEntry = Object.entries(hourCounts).sort((a, b) => b[1] - a[1])[0];
+
+  return { confirmedCount, topItems, peakHour: peakHourEntry ? Number(peakHourEntry[0]) : null };
 }
 
 const app = express();
@@ -389,16 +510,19 @@ setInterval(() => {
   }
 }, 5 * 60 * 1000).unref();
 
-// ---- PER-SENDER SESSION LOCK ----
-// Serializes message processing per sender so two near-simultaneous
-// messages from the SAME customer can't interleave against the same mutable
-// session object (e.g. one message's cart update getting lost to a race
-// with another, since the AI calls in between mean a single message's
-// processing can take several seconds). Different senders are completely
-// unaffected — each gets its own independent chain. Single-process only:
-// if this ever runs as more than one instance, each gets its own lock and
-// the guarantee above no longer holds across instances.
-const sessionLocks = new Map(); // from -> tail promise of the current chain
+// ---- KEYED ASYNC LOCK ----
+// General-purpose: serializes async calls sharing the same key, in order,
+// each waiting for the previous to settle. Originally built for per-sender
+// session processing (two near-simultaneous messages from the SAME customer
+// can't interleave against the same mutable session object) but reused
+// as-is for the Manager/Kitchen/Customers Sheets writes below — those have
+// the SAME shape of problem (read-current-row-count-then-write can race
+// between two DIFFERENT customers' orders landing on the same row) with a
+// fixed key instead of a per-sender one. Different keys are completely
+// unaffected by each other. Single-process only: if this ever runs as more
+// than one instance, each gets its own lock and the guarantee no longer
+// holds across instances.
+const sessionLocks = new Map(); // key -> tail promise of the current chain
 
 function withSessionLock(key, fn) {
   const prev = sessionLocks.get(key) || Promise.resolve();
@@ -513,6 +637,57 @@ function applyMenuSheetRows(rows) {
   return soldOut;
 }
 
+// Case-insensitive substring match across all categories, for the owner-
+// facing SOLDOUT/INSTOCK <item> chat commands (see isOwner() below) — lets
+// staff toggle availability by texting a name instead of opening the
+// Availability sheet. Returns the FIRST match; ambiguous partial names
+// (e.g. "strawberry", which exists in 4 categories) resolve to whichever
+// category is listed first in menu-data.js — acceptable for a quick chat
+// command where the owner can immediately see if it picked the wrong one.
+function findMenuItemByName(query) {
+  const q = query.trim().toLowerCase();
+  if (!q) return null;
+  for (const cat of MENU) {
+    const idx = cat.items.findIndex(item => item.name.toLowerCase().includes(q));
+    if (idx >= 0) return { categoryId: cat.id, itemIndex: idx + 1, item: cat.items[idx] };
+  }
+  return null;
+}
+
+// Toggles availability both in-memory (immediate effect on the very next
+// customer message) and in the Availability sheet (so it survives the next
+// 2-minute refreshMenuFromSheet cycle instead of being overwritten back).
+// Fails open on the sheet-write half — an owner command should still work
+// in-memory for this process's lifetime even if the write-through fails,
+// same "never let Sheets flakiness break the live path" principle as
+// everywhere else in this file.
+async function setItemAvailability(categoryId, itemIndex, available) {
+  const key = itemKey(categoryId, itemIndex);
+  if (available) soldOutIds.delete(key); else soldOutIds.add(key);
+
+  if (!process.env.GOOGLE_SHEETS_ID) return;
+  try {
+    await withSessionLock('__sheets_availability_write__', async () => {
+      const res = await withTimeout(sheets.spreadsheets.values.get({
+        spreadsheetId: process.env.GOOGLE_SHEETS_ID,
+        range: 'Availability!A2:A',
+      }), 8000);
+      const rows = res.data.values || [];
+      const rowIndex = rows.findIndex(r => (r[0] || '').trim() === key);
+      if (rowIndex < 0) return; // item not in the Availability sheet (never seeded) — in-memory toggle still applies
+      const rowNum = rowIndex + 2;
+      await withTimeout(sheets.spreadsheets.values.update({
+        spreadsheetId: process.env.GOOGLE_SHEETS_ID,
+        range: `Availability!D${rowNum}`,
+        valueInputOption: 'USER_ENTERED',
+        requestBody: { values: [[available]] },
+      }), 6000);
+    });
+  } catch (err) {
+    console.error(`Availability sheet write-through failed for ${key} (in-memory toggle still applied):`, err.message || err);
+  }
+}
+
 async function refreshMenuFromSheet() {
   if (!process.env.GOOGLE_SHEETS_ID) return;
   try {
@@ -569,20 +744,26 @@ async function saveCustomerProfile(from, fields) {
   customerProfiles[from] = merged;
 
   if (!process.env.GOOGLE_SHEETS_ID) return;
-  const res = await withTimeout(sheets.spreadsheets.values.get({
-    spreadsheetId: process.env.GOOGLE_SHEETS_ID,
-    range: 'Customers!A2:D',
-  }), 8000);
-  const rows = res.data.values || [];
-  const rowIndex = rows.findIndex(r => (r[0] || '').replace(/\D/g, '') === String(from));
-  const rowValues = [`'+${from}`, merged.savedAddress || '', merged.notes || '', merged.updatedAt];
-  const rowNum = rowIndex >= 0 ? rowIndex + 2 : rows.length + 2; // +2: range starts at row 2 (header is row 1)
-  await withTimeout(sheets.spreadsheets.values.update({
-    spreadsheetId: process.env.GOOGLE_SHEETS_ID,
-    range: `Customers!A${rowNum}:D${rowNum}`,
-    valueInputOption: 'USER_ENTERED',
-    requestBody: { values: [rowValues] },
-  }), 6000);
+  // Same cross-customer read-then-write race as logOrderToSheets — two
+  // different customers saving a profile at once could otherwise both read
+  // "row not found, append at N" and collide. Own lock key since this
+  // writes to a different sheet and has no reason to queue behind orders.
+  await withSessionLock('__sheets_customers_write__', async () => {
+    const res = await withTimeout(sheets.spreadsheets.values.get({
+      spreadsheetId: process.env.GOOGLE_SHEETS_ID,
+      range: 'Customers!A2:D',
+    }), 8000);
+    const rows = res.data.values || [];
+    const rowIndex = rows.findIndex(r => (r[0] || '').replace(/\D/g, '') === String(from));
+    const rowValues = [`'+${from}`, merged.savedAddress || '', merged.notes || '', merged.updatedAt];
+    const rowNum = rowIndex >= 0 ? rowIndex + 2 : rows.length + 2; // +2: range starts at row 2 (header is row 1)
+    await withTimeout(sheets.spreadsheets.values.update({
+      spreadsheetId: process.env.GOOGLE_SHEETS_ID,
+      range: `Customers!A${rowNum}:D${rowNum}`,
+      valueInputOption: 'USER_ENTERED',
+      requestBody: { values: [rowValues] },
+    }), 6000);
+  });
 }
 
 // ---- ORDER STATUS POLLING (proactive WhatsApp updates) ----
@@ -814,6 +995,10 @@ const TXT = {
     savedAddressNew: 'Enter new address',
     noteSaved: "Got it — I've saved that note for next time. 📝",
     reorderUsualPrompt: 'Reorder your usual? 🔁',
+    abandonedCartRecovery: (percent) => `🎁 Still thinking it over? Your cart's still saved — come back in the next while and get *${percent}% off* this order. Just say *YES* and it's applied automatically!`,
+    discountApplied: (percent) => `🎉 ${percent}% discount applied!`,
+    ordersPausedMsg: "😔 We're not able to take new orders for the next little while — your cart's saved, just type *done* again in a bit to check out.",
+    duplicateOrderWarning: (num) => `⚠️ Heads up — you just placed order #${num} a couple minutes ago. Sure you want to place *another* order? Reply *yes* again to confirm.`,
   },
   es: {
     howToOrder: () => `🍧 *Créme De La Créme* 🍧
@@ -889,6 +1074,10 @@ const TXT = {
     savedAddressNew: 'Escribir nueva dirección',
     noteSaved: 'Listo — guardé esa nota para la próxima vez. 📝',
     reorderUsualPrompt: '¿Repetir lo de siempre? 🔁',
+    abandonedCartRecovery: (percent) => `🎁 ¿Todavía lo estás pensando? Tu carrito sigue guardado — regresa pronto y obtén *${percent}% de descuento* en esta orden. ¡Solo responde *SI* y se aplica automáticamente!`,
+    discountApplied: (percent) => `🎉 ¡Descuento del ${percent}% aplicado!`,
+    ordersPausedMsg: '😔 No podemos tomar pedidos nuevos por un momento — tu carrito está guardado, solo escribe *done* otra vez en un rato para finalizar.',
+    duplicateOrderWarning: (num) => `⚠️ Un momento — hiciste la orden #${num} hace un par de minutos. ¿Seguro que quieres hacer *otra* orden? Responde *si* otra vez para confirmar.`,
   },
 };
 
@@ -929,6 +1118,7 @@ function newSession() {
     lastRawMsg: null,
     escalationStage: 0, // 0=none, 1=softened tone shown, 2=shortcut offered, 3=escalated to a human — one-way ratchet, resets with the session
     transcript: [], // { role: 'customer'|'bot', text } — capped, attached on human handoff
+    duplicateWarningAcked: false, // see the duplicate-order soft-warning at 'confirm'
   };
 }
 
@@ -947,6 +1137,18 @@ const IDLE_HOLD_MS = 10 * 60 * 1000;   // ~10 min: "holding your order..."
 const IDLE_EXPIRE_MS = 30 * 60 * 1000; // ~30 min: save cart + offer resume next time
 const SAVED_CART_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000; // prune very old unclaimed saved carts
 const ORDER_CANCEL_WINDOW_MS = 3 * 60 * 1000; // post-confirmation edit/cancel window — see the "cancel order" command
+// Abandoned-cart recovery (Phase 5): a second, incentivized nudge ~1hr after
+// the cart was first saved (~1.5hr total idle) — well within WhatsApp's
+// 24-hour free-form messaging window, so no pre-approved template is
+// needed for this one (unlike a genuinely next-day recovery would require).
+const ABANDONED_CART_RECOVERY_DELAY_MS = 60 * 60 * 1000;
+const ABANDONED_CART_DISCOUNT_PERCENT = 10;
+// Duplicate-order soft warning (Phase 5): confirming again within this
+// window of a previous confirmed order asks "are you sure?" once, rather
+// than silently creating a second order — catches confused double-orders
+// from impatience/accidental resubmission without permanently blocking a
+// customer who genuinely wants two separate orders close together.
+const DUPLICATE_ORDER_WARNING_MS = 2 * 60 * 1000;
 
 function sweepIdleSessions() {
   const now = Date.now();
@@ -975,7 +1177,10 @@ function sweepIdleSessions() {
         mode: session.mode,
         address: session.address,
         savedAt: now,
+        recoverySent: false, // see the recovery pass below
+        discountEligible: false,
       };
+      funnelCounters.cartAbandoned++;
       const preservedLanguage = session.language;
       sessions[from] = newSession();
       sessions[from].language = preservedLanguage;
@@ -1000,11 +1205,26 @@ function sweepIdleSessions() {
   }
 
   for (const from of Object.keys(savedCarts)) {
-    if (now - savedCarts[from].savedAt > SAVED_CART_MAX_AGE_MS) {
+    const saved = savedCarts[from];
+
+    if (now - saved.savedAt > SAVED_CART_MAX_AGE_MS) {
       delete savedCarts[from];
       // Clean up the paired empty pendingResume shell left in `sessions`
       // (see above) at the same time, now that there's nothing left to resume.
       if (sessions[from] && sessions[from].pendingResume) delete sessions[from];
+      continue;
+    }
+
+    // Second, incentivized nudge — only once per saved cart. Only fires for
+    // a session still in the pendingResume state (i.e. they haven't already
+    // come back and either resumed or started fresh in the meantime).
+    if (!saved.recoverySent && now - saved.savedAt >= ABANDONED_CART_RECOVERY_DELAY_MS
+      && sessions[from] && sessions[from].pendingResume) {
+      saved.recoverySent = true;
+      saved.discountEligible = true;
+      const lang = (sessions[from] && sessions[from].language) || 'en';
+      sendWhatsAppMessage(from, TXT[lang].abandonedCartRecovery(ABANDONED_CART_DISCOUNT_PERCENT))
+        .catch(err => console.error(`Abandoned-cart recovery message failed for ${from}:`, err.message || err));
     }
   }
 }
@@ -1760,6 +1980,59 @@ async function processWhatsAppMessage(message, res) {
     console.log(`Message from ${from}: ${rawMsg}`);
     pushTranscript(from, 'customer', rawMsg);
 
+    // ---- OWNER COMMANDS (Phase 5) ----
+    // Checked before anything else, regardless of the owner's own session
+    // state (language picked or not, mid-order or not) — these are
+    // administrative overrides, not part of the customer conversation flow.
+    // English-only replies: this is a staff tool, not customer-facing UX.
+    if (isOwner(from)) {
+      if (msg === 'pause orders') {
+        ordersPaused = true;
+        return sendReply(res, from, '⏸️ Orders paused. New checkouts will be blocked until you send "resume orders".');
+      }
+      if (msg === 'resume orders') {
+        ordersPaused = false;
+        return sendReply(res, from, '▶️ Orders resumed — customers can check out again.');
+      }
+      const soldOutMatch = rawMsg.trim().match(/^soldout\s+(.+)/i);
+      if (soldOutMatch) {
+        const found = findMenuItemByName(soldOutMatch[1]);
+        if (!found) return sendReply(res, from, `Couldn't find a menu item matching "${soldOutMatch[1]}".`);
+        await setItemAvailability(found.categoryId, found.itemIndex, false);
+        return sendReply(res, from, `😔 Marked *${found.item.name}* sold out.`);
+      }
+      const inStockMatch = rawMsg.trim().match(/^(instock|available)\s+(.+)/i);
+      if (inStockMatch) {
+        const found = findMenuItemByName(inStockMatch[2]);
+        if (!found) return sendReply(res, from, `Couldn't find a menu item matching "${inStockMatch[2]}".`);
+        await setItemAvailability(found.categoryId, found.itemIndex, true);
+        return sendReply(res, from, `✅ Marked *${found.item.name}* back in stock.`);
+      }
+      if (msg === 'queue') {
+        try {
+          const { total, counts } = await getQueueSummary();
+          const breakdown = Object.entries(counts).map(([status, n]) => `  ${status}: ${n}`).join('\n') || '  (nothing open)';
+          return sendReply(res, from, `📋 *${total} open order${total === 1 ? '' : 's'}*\n${breakdown}`);
+        } catch (err) {
+          console.error('QUEUE command failed:', err.message || err);
+          return sendReply(res, from, 'Sorry, couldn\'t read the order queue right now — try again in a moment.');
+        }
+      }
+      if (msg === 'stats') {
+        try {
+          const { confirmedCount, topItems, peakHour } = await getOrderStats();
+          const topItemsText = topItems.length > 0
+            ? topItems.map(([name, n], i) => `  ${i + 1}. ${name} (${n})`).join('\n')
+            : '  (no orders yet)';
+          const peakHourText = peakHour === null ? 'n/a' : formatHour12(peakHour);
+          return sendReply(res, from, `📊 *Stats*\n\n*All-time confirmed orders:* ${confirmedCount}\n*Peak hour:* ${peakHourText}\n*Top items:*\n${topItemsText}\n\n*Since server start:*\n  Language picked: ${funnelCounters.languageSelected}\n  Checkout started: ${funnelCounters.checkoutStarted}\n  Carts abandoned (30+ min idle): ${funnelCounters.cartAbandoned}`);
+        } catch (err) {
+          console.error('STATS command failed:', err.message || err);
+          return sendReply(res, from, 'Sorry, couldn\'t compute stats right now — try again in a moment.');
+        }
+      }
+    }
+
     if (msg === 'cancel' || msg === 'cancelar') {
       const lang = session.language || 'en';
       delete savedCarts[from];
@@ -1773,11 +2046,13 @@ async function processWhatsAppMessage(message, res) {
       if (msg === '1' || msg === 'english' || msg === 'en') {
         session.language = 'en';
         session.step = 'menu';
+        funnelCounters.languageSelected++;
         return sendReply(res, from, [withClosedBanner(welcomeText('en'), 'en'), menuButtonMessage('en')]);
       }
       if (msg === '2' || msg === 'español' || msg === 'espanol' || msg === 'es') {
         session.language = 'es';
         session.step = 'menu';
+        funnelCounters.languageSelected++;
         return sendReply(res, from, [withClosedBanner(welcomeText('es'), 'es'), menuButtonMessage('es')]);
       }
       // Only auto-picks on a strong, unambiguous signal — a bare "hi" or a
@@ -1787,6 +2062,7 @@ async function processWhatsAppMessage(message, res) {
       if (detected) {
         session.language = detected;
         session.step = 'menu';
+        funnelCounters.languageSelected++;
         return sendReply(res, from, [withClosedBanner(welcomeText(detected), detected), menuButtonMessage(detected)]);
       }
       return sendReply(res, from, languageButtonsMessage());
@@ -1813,6 +2089,15 @@ async function processWhatsAppMessage(message, res) {
             restoredCart.push(item);
           }
         });
+        // Abandoned-cart recovery discount, if this resume was triggered by
+        // that ~1hr win-back message — baked directly into each restored
+        // line's price so every downstream reader (cartTotal, Sheets log,
+        // driver notify) sees the discounted total with no other changes.
+        if (saved.discountEligible) {
+          restoredCart.forEach(item => {
+            item.price = Math.round(item.price * (1 - ABANDONED_CART_DISCOUNT_PERCENT / 100) * 100) / 100;
+          });
+        }
         session.cart = restoredCart;
         session.mode = saved.mode;
         session.address = saved.address;
@@ -1821,6 +2106,7 @@ async function processWhatsAppMessage(message, res) {
         delete savedCarts[from];
         const bits = [];
         if (soldOutLines.length > 0) bits.push(soldOutLines.join('\n'));
+        if (saved.discountEligible) bits.push(t.discountApplied(ABANDONED_CART_DISCOUNT_PERCENT));
         bits.push(t.resumeRestored(cartText(session.cart, lang)));
         return sendReply(res, from, [bits.join('\n\n'), ...categoryListMessages(lang)]);
       } else if (msg === 'menu' || msg === 'no' || msg === 'cancel' || msg === 'cancelar') {
@@ -1962,10 +2248,13 @@ async function processWhatsAppMessage(message, res) {
         } else if (msg === 'done' || msg === 'listo' || msg === 'checkout') {
           if (session.cart.length === 0) {
             reply = [t.cartEmptyCheckout, ...categoryListMessages(lang)];
+          } else if (ordersPaused) {
+            reply = t.ordersPausedMsg;
           } else {
             // Checkout proceeds even while closed — confirming becomes a
             // pre-order instead of a dead end (see the 'confirm' step below).
             session.step = 'mode';
+            funnelCounters.checkoutStarted++;
             reply = [cartText(session.cart, lang), modeButtonsMessage(SHOP_INFO.deliveryFee, lang)];
           }
         } else {
@@ -2018,8 +2307,11 @@ async function processWhatsAppMessage(message, res) {
         if (msg === 'done' || msg === 'listo' || msg === 'checkout') {
           if (session.cart.length === 0) {
             reply = [t.cartEmptyCheckout, categoryItemsListMessage(cat, lang)];
+          } else if (ordersPaused) {
+            reply = t.ordersPausedMsg;
           } else {
             session.step = 'mode';
+            funnelCounters.checkoutStarted++;
             reply = [cartText(session.cart, lang), modeButtonsMessage(SHOP_INFO.deliveryFee, lang)];
           }
           break;
@@ -2249,7 +2541,25 @@ async function processWhatsAppMessage(message, res) {
           reply = session.mode === 'delivery' ? t.askAddress(SHOP_INFO.deliveryFee) : modeButtonsMessage(SHOP_INFO.deliveryFee, lang);
           break;
         }
-        if (msg === 'yes' || msg === 'si' || msg === 'sí' || msg === 'confirm' || msg === 'confirmo') {
+        if ((msg === 'yes' || msg === 'si' || msg === 'sí' || msg === 'confirm' || msg === 'confirmo') && ordersPaused) {
+          // Defense in depth: the 'done' checkout step already blocks on
+          // this, but an owner could toggle PAUSE ORDERS while a customer
+          // is already sitting at 'confirm' — don't let a stale "yes" slip
+          // an order through after that.
+          reply = t.ordersPausedMsg;
+        } else if (msg === 'yes' || msg === 'si' || msg === 'sí' || msg === 'confirm' || msg === 'confirmo') {
+          const recentOrder = lastOrders[from];
+          const duplicateRisk = recentOrder && recentOrder.confirmedAt
+            && (Date.now() - recentOrder.confirmedAt) < DUPLICATE_ORDER_WARNING_MS
+            && !session.duplicateWarningAcked;
+          if (duplicateRisk) {
+            // Don't create the order yet — wait for a second explicit "yes"
+            // now that they've seen the warning. Session stays at 'confirm'.
+            session.duplicateWarningAcked = true;
+            reply = t.duplicateOrderWarning(recentOrder.orderNumber);
+            break;
+          }
+
           const orderNumber = Math.floor(1000 + Math.random() * 9000);
           const isPreorder = !isShopOpen();
           session.isPreorder = isPreorder; // read by logOrderToSheets/notifyDriver below to tag the order
