@@ -129,6 +129,7 @@ async function markAsRead(messageId) {
 // fire-and-forget pattern the proactive status-update code already used.
 function sendReply(res, to, textOrMessages) {
   if (process.env.DEBUG_REPLIES) console.log(`REPLY >>> to ${to}:`, JSON.stringify(textOrMessages));
+  pushTranscript(to, 'bot', replySummaryText(textOrMessages));
   if (!res.headersSent) res.sendStatus(200); // the webhook is usually already acked earlier — see app.post('/whatsapp')
   const messages = Array.isArray(textOrMessages) ? textOrMessages : [textOrMessages];
   (async () => {
@@ -695,6 +696,9 @@ const TXT = {
     agentRequested: (phone) => `📞 Got it — connecting you with our team, someone will reach out shortly. You can also call us directly at ${phone}.`,
     statusReply: (num, status) => `📦 Order #${num}: *${status}*`,
     statusUnavailable: (phone) => `Sorry, I couldn't look up your order status right now — please call us at ${phone}.`,
+    stopGuessing: "🤔 Let's try this a different way — tap an option below, or type *agent* to talk to a real person.",
+    frustrationSoften: "😊 Sorry for the back-and-forth — let's get this sorted out for you.",
+    frustrationShortcut: "Want me to just have our team give you a call instead? Type *agent* anytime.",
   },
   es: {
     howToOrder: `🍧 *Créme De La Créme* 🍧
@@ -755,6 +759,9 @@ const TXT = {
     agentRequested: (phone) => `📞 Listo — te estamos conectando con nuestro equipo, alguien se comunicará pronto. También puedes llamarnos directamente al ${phone}.`,
     statusReply: (num, status) => `📦 Orden #${num}: *${status}*`,
     statusUnavailable: (phone) => `Lo sentimos, no pudimos consultar el estado de tu orden ahora — por favor llámanos al ${phone}.`,
+    stopGuessing: '🤔 Intentemos de otra forma — toca una opción abajo, o escribe *agent* para hablar con una persona real.',
+    frustrationSoften: '😊 Disculpa el ir y venir — vamos a resolver esto.',
+    frustrationShortcut: '¿Quieres que nuestro equipo te llame en vez de esto? Escribe *agent* cuando quieras.',
   },
 };
 
@@ -790,6 +797,11 @@ function newSession() {
     lastMessageAt: Date.now(),
     nudgeStage: 0, // 0 = none sent, 1 = ~3min nudge sent, 2 = ~10min hold sent — see sweepIdleSessions()
     pendingResume: false, // true right after a saved cart is offered back to the customer
+    frustrationScore: 0,
+    parseFailureStreak: 0, // consecutive "didn't understand" replies — see scoreFrustrationSignals()
+    lastRawMsg: null,
+    escalationStage: 0, // 0=none, 1=softened tone shown, 2=shortcut offered, 3=escalated to a human — one-way ratchet, resets with the session
+    transcript: [], // { role: 'customer'|'bot', text } — capped, attached on human handoff
   };
 }
 
@@ -869,6 +881,76 @@ function sweepIdleSessions() {
   }
 }
 
+// ---- MOOD DETECTION / ESCALATION (Phase 2) ----
+// Deliberately conservative: false positives (softening tone or offering a
+// human to someone who isn't actually frustrated) are worse than a missed
+// detection, per the product spec. Scoring only runs on genuine free-form
+// text/voice input (see isFreeform in processWhatsAppMessage) — structured
+// button/list taps can't meaningfully signal frustration the same way.
+const FRUSTRATION_SOFTEN_THRESHOLD = 3;
+const FRUSTRATION_SHORTCUT_THRESHOLD = 5;
+const FRUSTRATION_ESCALATE_THRESHOLD = 8;
+
+// Small, unambiguous, word-boundary-matched lists on purpose — this is meant
+// to catch clear anger, not to be an exhaustive profanity filter.
+const PROFANITY_REGEX = /\b(fuck(ing)?|shit|bullshit|pendej[oa]|mierda|carajo|estúpid[oa]|estupid[oa])\b/i;
+const IMPATIENCE_REGEX = /how long|still waiting|this is ridiculous|hurry up|worst service|terrible service|cu[aá]nto (tiempo|falta)|todav[ií]a estoy esperando|esto es (una )?broma/i;
+
+// Pure and side-effect-free so it's easy to reason about/test in isolation —
+// only reads the raw text, doesn't touch session state.
+function scoreFrustrationSignals(rawMsg) {
+  const msg = rawMsg.trim();
+  let score = 0;
+  if (/\?{2,}/.test(msg)) score += 1; // "???"
+  const letters = msg.replace(/[^a-zA-Z]/g, '');
+  if (letters.length >= 6 && letters === letters.toUpperCase()) score += 1; // ALL CAPS (ignore short caps like "OK")
+  if (PROFANITY_REGEX.test(msg)) score += 3;
+  if (IMPATIENCE_REGEX.test(msg.toLowerCase())) score += 2;
+  return score;
+}
+
+// ---- TRANSCRIPT (for human handoff — "never repeat themselves") ----
+const TRANSCRIPT_MAX_ENTRIES = 24;
+
+function pushTranscript(from, role, text) {
+  const session = sessions[from];
+  if (!session) return;
+  if (!session.transcript) session.transcript = [];
+  session.transcript.push({ role, text: (text || '').slice(0, 300) });
+  if (session.transcript.length > TRANSCRIPT_MAX_ENTRIES) session.transcript.shift();
+}
+
+// Flattens a sendReply-shaped textOrMessages (string, array, button/list
+// object) down to plain text for the transcript — staff reading a handoff
+// don't need the actual WhatsApp button JSON, just what it said.
+function replySummaryText(textOrMessages) {
+  const messages = Array.isArray(textOrMessages) ? textOrMessages : [textOrMessages];
+  return messages.filter(Boolean).map(m => {
+    if (typeof m === 'string') return m;
+    if (m.buttons) return m.buttons.body;
+    if (m.list) return m.list.body;
+    if (m.fallback) return m.fallback;
+    return '[message]';
+  }).filter(Boolean).join(' | ').slice(0, 300);
+}
+
+function transcriptText(session) {
+  if (!session.transcript || session.transcript.length === 0) return '(no transcript)';
+  return session.transcript.map(e => `${e.role === 'customer' ? '👤' : '🤖'} ${e.text}`).join('\n');
+}
+
+// Shared by the manual AGENT command and the automatic frustration-ladder
+// escalation — both need to reach the same staff number with the same
+// context so the customer never has to repeat themselves either way.
+function escalateToHuman(from, session, lang, reasonLine) {
+  const cartSummary = session.cart.length > 0 ? `\n\nCart:\n${cartText(session.cart, lang)}` : '';
+  const staffMsg = `🔔 ${reasonLine}\nCustomer: +${from} (step: ${session.step})${cartSummary}\n\n📝 Recent conversation:\n${transcriptText(session)}`;
+  if (process.env.DEBUG_REPLIES) console.log('ESCALATE >>>', staffMsg);
+  DRIVER_NUMBERS.forEach(num => {
+    sendWhatsAppMessage(num, staffMsg).catch(err => console.error(`Escalation notify failed for ${num}:`, err.message || err));
+  });
+}
+
 // ---- CART HELPERS ----
 function addToCart(cart, name, price, qty, note = '', categoryId = null, itemIndex = null) {
   const existing = cart.find(c => c.name === name && c.price === price && (c.note || '') === note);
@@ -910,6 +992,25 @@ function menuListText() {
 
 function welcomeText(lang) {
   return TXT[lang].howToOrder;
+}
+
+// Sent before the customer has picked a language, so the body/fallback text
+// is deliberately bilingual — this is the one place in the UI where `lang`
+// isn't known yet. Button ids ('en'/'es') match the exact tokens the
+// language-selection branch already accepts from typed text, so no other
+// change is needed to wire it up.
+function languageButtonsMessage() {
+  const body = '🍧 *Créme De La Créme* 🍧\n\nChoose your language / Elige tu idioma:';
+  return {
+    buttons: {
+      body,
+      buttons: [
+        { id: 'en', title: 'English 🇬🇧' },
+        { id: 'es', title: 'Español 🇪🇸' },
+      ],
+    },
+    fallback: `${body}\n1. English\n2. Español`,
+  };
 }
 
 // Single-button prompt sent right after the how-to-order text — tapping it
@@ -1476,8 +1577,10 @@ async function processWhatsAppMessage(message, res) {
     }
 
     const msg = rawMsg.toLowerCase();
+    const isFreeform = message.type === 'text' || message.type === 'audio'; // structured button/list taps don't carry frustration signals the same way
 
     console.log(`Message from ${from}: ${rawMsg}`);
+    pushTranscript(from, 'customer', rawMsg);
 
     if (msg === 'cancel' || msg === 'cancelar') {
       const lang = session.language || 'en';
@@ -1499,7 +1602,7 @@ async function processWhatsAppMessage(message, res) {
         session.step = 'menu';
         return sendReply(res, from, [withClosedBanner(welcomeText('es'), 'es'), menuButtonMessage('es')]);
       }
-      return sendReply(res, from, '🍧 *Créme De La Créme* 🍧\n\nChoose your language / Elige tu idioma:\n1. English\n2. Español');
+      return sendReply(res, from, languageButtonsMessage());
     }
     const lang = session.language;
     const t = TXT[lang];
@@ -1545,7 +1648,7 @@ async function processWhatsAppMessage(message, res) {
     if (msg === 'language' || msg === 'idioma' || msg === 'lang') {
       session.language = null;
       session.step = 'language';
-      return sendReply(res, from, '🍧 *Créme De La Créme* 🍧\n\nChoose your language / Elige tu idioma:\n1. English\n2. Español');
+      return sendReply(res, from, languageButtonsMessage());
     }
 
     if (msg === 'help' || msg === 'ayuda') {
@@ -1553,11 +1656,8 @@ async function processWhatsAppMessage(message, res) {
     }
 
     if (msg === 'agent' || msg === 'agente' || msg === 'human' || msg === 'humano') {
-      const cartSummary = session.cart.length > 0 ? `\n\n${cartText(session.cart, lang)}` : '';
-      const staffMsg = `🔔 Customer +${from} requested a human agent (step: ${session.step}).${cartSummary}`;
-      DRIVER_NUMBERS.forEach(num => {
-        sendWhatsAppMessage(num, staffMsg).catch(err => console.error(`Agent-escalation notify failed for ${num}:`, err.message || err));
-      });
+      escalateToHuman(from, session, lang, 'Customer requested a human agent.');
+      session.escalationStage = 3; // don't also auto-escalate again this session — they've already been connected
       return sendReply(res, from, t.agentRequested(SHOP_INFO.phone));
     }
 
@@ -1590,6 +1690,7 @@ async function processWhatsAppMessage(message, res) {
     }
 
     let reply = '';
+    let parseFailed = false; // set true at each "didn't understand" branch below — see the frustration-scoring block after the switch
 
     switch (session.step) {
       case 'menu': {
@@ -1661,6 +1762,7 @@ async function processWhatsAppMessage(message, res) {
             // attemptFreeOrder already got from the same call.
             reply = `${orderResult.answer}\n\n${t.humanHelp(SHOP_INFO.phone)}`;
           } else {
+            parseFailed = true;
             reply = `${t.notUnderstood}\n\n${t.humanHelp(SHOP_INFO.phone)}`;
           }
         }
@@ -1705,6 +1807,7 @@ async function processWhatsAppMessage(message, res) {
           const item = cat && cat.items[itemIndex];
 
           if (!item) {
+            parseFailed = true;
             reply = [t.itemNotFound, categoryItemsListMessage(cat, lang)];
           } else if (isItemSoldOut(cat.id, itemIndex + 1)) {
             reply = [t.soldOutItem(item.name), categoryItemsListMessage(cat, lang)];
@@ -1746,6 +1849,7 @@ async function processWhatsAppMessage(message, res) {
           if (orderResult.added.length > 0 || orderResult.soldOut.length > 0) {
             reply = [orderResultText(orderResult, session, lang), categoryItemsListMessage(cat, lang)];
           } else {
+            parseFailed = true;
             reply = [t.itemNotFound, categoryItemsListMessage(cat, lang)];
           }
         }
@@ -1772,6 +1876,7 @@ async function processWhatsAppMessage(message, res) {
           if (orderResult.added.length > 0 || orderResult.soldOut.length > 0) {
             reply = [orderResultText(orderResult, session, lang), sizeButtonsMessage(item, lang)];
           } else {
+            parseFailed = true;
             reply = [t.invalidSize, sizeButtonsMessage(item, lang)];
           }
         } else {
@@ -1805,6 +1910,7 @@ async function processWhatsAppMessage(message, res) {
           if (orderResult.added.length > 0 || orderResult.soldOut.length > 0) {
             reply = `${orderResultText(orderResult, session, lang)}\n\n` + t.askQty(label, price.toFixed(2), MAX_QTY);
           } else {
+            parseFailed = true;
             reply = t.invalidQty(MAX_QTY);
           }
         } else {
@@ -1877,6 +1983,7 @@ async function processWhatsAppMessage(message, res) {
           if (orderResult.added.length > 0 || orderResult.soldOut.length > 0) {
             reply = [orderResultText(orderResult, session, lang), cartText(session.cart, lang), modeButtonsMessage(SHOP_INFO.deliveryFee, lang)];
           } else {
+            parseFailed = true;
             reply = t.askModeInvalid;
           }
         }
@@ -1949,6 +2056,7 @@ async function processWhatsAppMessage(message, res) {
               : t.pickupConfirm;
             reply = [orderResultText(orderResult, session, lang), cartText(session.cart, lang), confirmButtonsMessage(reconfirm, lang)];
           } else {
+            parseFailed = true;
             reply = t.confirmInvalid;
           }
         }
@@ -1958,6 +2066,59 @@ async function processWhatsAppMessage(message, res) {
       default: {
         session.step = 'menu';
         reply = categoryListMessages(lang);
+      }
+    }
+
+    // ---- MOOD DETECTION / ESCALATION LADDER (Phase 2) ----
+    // Only scored on genuine free-form input — see isFreeform above.
+    if (isFreeform) {
+      session.parseFailureStreak = parseFailed ? session.parseFailureStreak + 1 : 0;
+
+      let signalScore = scoreFrustrationSignals(rawMsg);
+      if (session.lastRawMsg && msg === session.lastRawMsg.toLowerCase() && msg.length > 0) signalScore += 2; // repeated identical message
+      if (session.parseFailureStreak >= 2) signalScore += 3; // strongest signal per the spec — the bot failing to parse the same input twice
+      session.frustrationScore = Math.max(0, session.frustrationScore - 1) + signalScore; // mild decay per calm message, quick rise on real signals
+      session.lastRawMsg = rawMsg;
+
+      // Two (or more) failed parses in a row: stop letting the AI keep
+      // guessing — hand back a clear set of tappable options instead.
+      // IMPORTANT: only offer buttons that are safe for the CURRENT step —
+      // e.g. showing category buttons while stuck in 'quantity' would have
+      // a tapped category id like "1" silently read as "quantity = 1"
+      // instead of navigating, since session.step hasn't changed. Steps
+      // that are inherently free-text (quantity/notes/address) get just the
+      // text redirect toward MENU/AGENT, no buttons.
+      if (session.parseFailureStreak >= 2) {
+        const replyArr = Array.isArray(reply) ? reply : [reply];
+        let fallbackButtons = [];
+        if (session.step === 'menu' || session.step === 'item') {
+          fallbackButtons = categoryListMessages(lang);
+        } else if (session.step === 'size' && session.pendingItem) {
+          fallbackButtons = [sizeButtonsMessage(session.pendingItem, lang)];
+        } else if (session.step === 'mode') {
+          fallbackButtons = [modeButtonsMessage(SHOP_INFO.deliveryFee, lang)];
+        } else if (session.step === 'confirm') {
+          const reconfirm = session.mode === 'delivery' ? t.deliveryConfirm(session.address) : t.pickupConfirm;
+          fallbackButtons = [confirmButtonsMessage(reconfirm, lang)];
+        }
+        reply = [...replyArr, t.stopGuessing, ...fallbackButtons];
+      }
+
+      // One-way ratchet per session (escalationStage only moves up) so the
+      // same rung doesn't re-fire every single message once crossed.
+      if (session.frustrationScore >= FRUSTRATION_ESCALATE_THRESHOLD && session.escalationStage < 3) {
+        session.escalationStage = 3;
+        escalateToHuman(from, session, lang, 'Auto-escalated: customer seems frustrated.');
+        const replyArr = Array.isArray(reply) ? reply : [reply];
+        reply = [...replyArr, t.agentRequested(SHOP_INFO.phone)];
+      } else if (session.frustrationScore >= FRUSTRATION_SHORTCUT_THRESHOLD && session.escalationStage < 2) {
+        session.escalationStage = 2;
+        const replyArr = Array.isArray(reply) ? reply : [reply];
+        reply = [...replyArr, t.frustrationShortcut];
+      } else if (session.frustrationScore >= FRUSTRATION_SOFTEN_THRESHOLD && session.escalationStage < 1) {
+        session.escalationStage = 1;
+        const replyArr = Array.isArray(reply) ? reply : [reply];
+        reply = [t.frustrationSoften, ...replyArr];
       }
     }
 
