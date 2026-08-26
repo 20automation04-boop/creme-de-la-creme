@@ -179,28 +179,45 @@ function getSavedAddress(from) {
   return (profile && profile.savedAddress) || null;
 }
 
-// Broadcasts one message to every driver number, best-effort (one failure
-// doesn't stop the rest). Shared by notifyDriver, escalateToHuman, and the
-// "cancel order" command's driver notification — all three previously
-// hand-rolled their own version of this same loop.
-async function notifyAllDrivers(message) {
-  for (const driverNumber of DRIVER_NUMBERS) {
+// Broadcasts one message to every number in `numbers`, best-effort (one
+// failure doesn't stop the rest). Shared underlying piece for
+// notifyAllDrivers (DRIVER_NUMBERS) and notifyOwners (OWNER_NUMBERS) below.
+async function broadcastTo(numbers, message) {
+  for (const number of numbers) {
     try {
-      await sendWhatsAppMessage(driverNumber, message);
+      await sendWhatsAppMessage(number, message);
     } catch (err) {
-      console.error(`Driver notification failed for ${driverNumber}:`, err.message || err);
+      console.error(`Broadcast notify failed for ${number}:`, err.message || err);
     }
   }
+}
+
+// Shared by notifyDriver, escalateToHuman, and the "cancel order" command's
+// driver notification.
+function notifyAllDrivers(message) {
+  return broadcastTo(DRIVER_NUMBERS, message);
+}
+
+// New-order alert to staff — see notifyOwnerOfPickupOrder below (delivery
+// orders already get an equivalent alert via notifyDriver/DRIVER_NUMBERS).
+function notifyOwners(message) {
+  return broadcastTo(OWNER_NUMBERS, message);
+}
+
+// Dash-prefixed "- item x2 - $14.00" cart lines, the staff-facing format
+// used in both the delivery driver alert and the pickup owner alert below —
+// distinct from cartText's customer-facing numbered-list format.
+function staffItemLines(cart) {
+  return cart.map(i => {
+    const noteStr = i.note ? ` [${i.note}]` : '';
+    return `- ${i.name}${noteStr} x${i.qty} - $${(i.price * i.qty).toFixed(2)}`;
+  }).join('\n');
 }
 
 async function notifyDriver(orderNumber, session, from) {
   if (DRIVER_NUMBERS.length === 0) return;
 
-  const itemLines = session.cart.map(i => {
-    const noteStr = i.note ? ` [${i.note}]` : '';
-    return `- ${i.name}${noteStr} x${i.qty} - $${(i.price * i.qty).toFixed(2)}`;
-  }).join('\n');
-
+  const itemLines = staffItemLines(session.cart);
   const total = session.cart.reduce((sum, i) => sum + i.price * i.qty, 0).toFixed(2);
 
   const divider = '━━━━━━━━━━━━━━';
@@ -217,6 +234,26 @@ async function notifyDriver(orderNumber, session, from) {
     : `🏍️ *NEW DELIVERY ORDER #${orderNumber}*\n${divider}\n🛍️ *Items:*\n${itemLines}\n${divider}\n💵 *Total to collect: $${total} BZD*\n\n📍 *Deliver to:*\n${session.address}\n📞 *Customer phone:* +${from}${noteTag}`);
 
   await notifyAllDrivers(message);
+}
+
+// Delivery orders already alert staff via notifyDriver (DRIVER_NUMBERS) —
+// this closes the gap where a PICKUP order previously triggered no WhatsApp
+// notification at all, only a Sheets row, so it was easy for staff to miss
+// one if nobody happened to be watching the sheet at that moment. English-
+// only, matching the rest of the owner-facing text in this codebase.
+async function notifyOwnerOfPickupOrder(orderNumber, session, from) {
+  if (OWNER_NUMBERS.length === 0) return;
+
+  const itemLines = staffItemLines(session.cart);
+  const total = session.cart.reduce((sum, i) => sum + i.price * i.qty, 0).toFixed(2);
+  const divider = '━━━━━━━━━━━━━━';
+  const preorderTag = session.isPreorder ? '🕐 *PRE-ORDER — prep when we open*\n\n' : '';
+  const note = getCustomerNote(from);
+  const noteTag = note ? `\n\n⚠️ *Customer note:* ${note}` : '';
+
+  const message = preorderTag + `📦 *NEW PICKUP ORDER #${orderNumber}*\n${divider}\n🛍️ *Items:*\n${itemLines}\n${divider}\n💵 *Total: $${total} BZD*\n\n📞 *Customer phone:* +${from}${noteTag}`;
+
+  await notifyOwners(message);
 }
 
 const sheetsAuth = new google.auth.JWT({
@@ -2711,16 +2748,24 @@ async function processWhatsAppMessage(message, res) {
             confirmedAt: Date.now(), // powers the 3-minute post-confirmation cancel window — see the "cancel order" command
           };
 
-          // Fire-and-forget: Sheets logging and driver notification both run
-          // in the background WITHOUT being awaited here. The WhatsApp
+          // Fire-and-forget: Sheets logging and the staff notification both
+          // run in the background WITHOUT being awaited here. The WhatsApp
           // confirmation must go out immediately regardless of how long
           // these take — same reasoning as the original Sheets-logging fix.
           logOrderToSheets(orderNumber, session, from).catch(err => {
             console.error('Background Sheets log failed:', err);
           });
+          // EVERY confirmed order alerts staff by WhatsApp, not just
+          // deliveries — a pickup order used to only land in the Sheet with
+          // no notification at all, which was easy to miss if nobody
+          // happened to be watching it right then.
           if (session.mode === 'delivery') {
             notifyDriver(orderNumber, session, from).catch(err => {
               console.error('Background driver notification failed:', err);
+            });
+          } else {
+            notifyOwnerOfPickupOrder(orderNumber, session, from).catch(err => {
+              console.error('Background pickup-order notification failed:', err);
             });
           }
 
