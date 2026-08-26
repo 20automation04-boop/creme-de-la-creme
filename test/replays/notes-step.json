@@ -1,0 +1,14 @@
+{
+  "name": "notes-step-with-and-without-note",
+  "from": "19990000016",
+  "turns": [
+    { "in": "1", "expectStep": "menu" },
+    { "in": "1", "expectStep": "item" },
+    { "in": "1", "expectStep": "quantity" },
+    { "in": "1", "expectStep": "notes" },
+    { "in": "extra whipped cream please", "expectStep": "item", "expectCartLength": 1, "expectReplyContains": "extra whipped cream" },
+    { "in": "2", "expectStep": "quantity" },
+    { "in": "1", "expectStep": "notes" },
+    { "in": "0", "expectStep": "item", "expectCartLength": 2, "expectReplyNotContains": "[0]" }
+  ]
+}

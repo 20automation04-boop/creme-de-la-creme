@@ -1,0 +1,8 @@
+{
+  "name": "owner-queue-and-stats-commands",
+  "from": "__OWNER__",
+  "turns": [
+    { "in": "queue", "expectReplyContains": "open order" },
+    { "in": "stats" }
+  ]
+}

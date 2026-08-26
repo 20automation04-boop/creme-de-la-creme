@@ -1,0 +1,10 @@
+{
+  "name": "free-text-order-then-repeated-parse-failure",
+  "from": "19990000018",
+  "turns": [
+    { "in": "1", "expectStep": "menu" },
+    { "in": "I'd like a vanilla bean please", "expectStep": "menu", "expectCartLength": 1, "expectCartTotal": 7, "expectReplyContains": "Added" },
+    { "in": "zqxxnonsense123blah", "expectStep": "menu", "expectFieldAtLeast": ["parseFailureStreak", 1] },
+    { "in": "zqxxnonsense123blah", "expectStep": "menu", "expectFieldAtLeast": ["parseFailureStreak", 2], "expectReplyContains": "different way" }
+  ]
+}

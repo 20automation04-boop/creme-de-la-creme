@@ -1,0 +1,16 @@
+{
+  "name": "happy-path-delivery-with-size-spanish",
+  "from": "19990000002",
+  "turns": [
+    { "in": "2", "expectStep": "menu" },
+    { "in": "6", "expectStep": "item" },
+    { "in": "1", "expectStep": "size" },
+    { "in": "2", "expectStep": "quantity" },
+    { "in": "1", "expectStep": "notes" },
+    { "in": "sin azucar", "expectStep": "item", "expectCartLength": 1, "expectCartTotal": 8, "expectReplyContains": "Añadido" },
+    { "in": "listo", "expectStep": "mode" },
+    { "in": "entrega", "expectStep": "address" },
+    { "in": "123 Calle Principal", "expectStep": "confirm" },
+    { "in": "si", "expectStep": "language", "expectReplyContains": "confirmada" }
+  ]
+}

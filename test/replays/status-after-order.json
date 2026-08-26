@@ -1,0 +1,17 @@
+{
+  "name": "status-command-after-order",
+  "from": "19990000013",
+  "turns": [
+    { "in": "1", "expectStep": "menu" },
+    { "in": "status", "expectReplyContains": "don't have a previous order" },
+    { "in": "1", "expectStep": "item" },
+    { "in": "1", "expectStep": "quantity" },
+    { "in": "1", "expectStep": "notes" },
+    { "in": "0", "expectStep": "item" },
+    { "in": "done", "expectStep": "mode" },
+    { "in": "pickup", "expectStep": "confirm" },
+    { "in": "yes", "expectStep": "language", "expectReplyContains": "confirmed!" },
+    { "in": "1", "expectStep": "menu" },
+    { "in": "status", "expectReplyContains": "Confirmed" }
+  ]
+}

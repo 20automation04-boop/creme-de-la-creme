@@ -828,28 +828,103 @@ MENU.forEach(cat => {
   cat.items.forEach((item, idx) => menuItemById.set(itemKey(cat.id, idx + 1), item));
 });
 
+// Ids this process has confirmed present in the Availability sheet as of
+// the most recent successful (non-empty) refresh — the baseline
+// applyMenuSheetRows compares against to detect "row deleted -> discontinue
+// this item". Starts empty so the very first refresh (before any baseline
+// exists) never treats every item as newly-missing.
+let knownSheetItemKeys = new Set();
+
+// Test-only: lets menu-sheet.test.js start each scenario without residue
+// from a previous test's calls (knownSheetItemKeys is exactly the kind of
+// hidden state that assumes every real caller always passes the FULL
+// current sheet snapshot, which unit tests deliberately don't). No
+// production caller ever calls this.
+function resetMenuSheetTrackingForTests() {
+  knownSheetItemKeys = new Set();
+}
+
 // Pure row-parsing logic, pulled out of the Sheets fetch so it can be
-// exercised with synthetic rows (no network/write) as well as real ones.
-// Mutates price directly onto the shared MENU item objects — every existing
-// read site (cart, checkout, size buttons, AI order text, etc.) already
-// reads item.price/item.sizes[i].price straight off MENU, so this is the
-// only place that needs to know sheet rows exist at all. A missing/invalid
-// price cell is skipped and the previous price kept (never let a typo'd
-// cell silently become $0 or NaN); once a price IS overridden this way,
-// clearing the cell does not revert it — retype the original number to
-// undo an override.
+// exercised with synthetic rows (no network/write) as well as real ones —
+// it never touches `sheets` itself. Mutates price/name directly onto the
+// shared MENU item objects (creating or removing them too, for brand-new/
+// discontinued items) — every existing read site (cart, checkout, size
+// buttons, AI order text, etc.) already reads straight off MENU, so this is
+// the only place that needs to know sheet rows exist at all. A missing/
+// invalid price cell is skipped and the previous price kept (never let a
+// typo'd cell silently become $0 or NaN); once a price IS overridden this
+// way, clearing the cell does not revert it — retype the original number.
+//
+// Row id contract (column A):
+//   "categoryId.itemIndex" (e.g. "1.10") — an EXISTING item: update its
+//     name/price/availability in place. An id in this shape that ISN'T
+//     already known is left alone with a warning, not auto-created — a
+//     full id that doesn't match anything is more likely a typo than
+//     genuine intent, and guessing wrong here would file it under the
+//     wrong item permanently (see the corrections mechanism below for why
+//     the itemIndex can't just be trusted as typed).
+//   bare "categoryId" (e.g. "1", no dot) — ADD a brand-new item to that
+//     category. The itemIndex is deliberately never taken from what the
+//     owner typed (an owner-guessed index that doesn't match the item's
+//     real position in the category array would silently desync every
+//     sold-out/cart lookup for it) — it's computed from the category's
+//     actual current length instead, and the row's id gets corrected
+//     write-through so the sheet is self-documenting and this same row
+//     isn't re-treated as "new" again next cycle. `corrections` (returned
+//     alongside `soldOut`) carries those {rowIndex, id} pairs for the
+//     caller — which has the network client this function deliberately
+//     doesn't — to actually write back.
+//   blank/deleted — simply absent from `rows`; see the "removed" pass
+//     below, driven by comparing against knownSheetItemKeys.
 function applyMenuSheetRows(rows) {
   const soldOut = new Set();
-  for (const row of rows) {
-    const [id, , , availableCell, priceCell, largePriceCell] = row;
-    if (!id) continue;
-    const key = id.trim();
+  const seenIds = new Set();
+  const corrections = [];
+
+  rows.forEach((row, rowIndex) => {
+    const [idCell, , nameCell, availableCell, priceCell, largePriceCell] = row;
+    if (!idCell) return;
+    const rawId = idCell.trim();
+    if (!rawId) return;
+    const name = (nameCell || '').trim();
+
+    let key = rawId;
+    let item = menuItemById.get(key);
+
+    if (!item && !rawId.includes('.')) {
+      // Bare category id — create a new item, see the contract above.
+      const cat = MENU.find(c => c.id === rawId);
+      if (!cat) {
+        console.warn(`Availability sheet: skipping row ${rowIndex + 2} — "${rawId}" isn't a recognized category id.`);
+        return;
+      }
+      if (!name) {
+        console.warn(`Availability sheet: skipping new-item row ${rowIndex + 2} in category ${rawId} — no Item name filled in yet.`);
+        return;
+      }
+      const large = parseFloat(largePriceCell);
+      const hasSizes = Number.isFinite(large) && large > 0;
+      const regular = parseFloat(priceCell) || 0;
+      item = hasSizes
+        ? { name, sizes: [{ key: '1', label: 'Regular', price: regular }, { key: '2', label: 'Large', price: large }] }
+        : { name, price: regular };
+      cat.items.push(item);
+      key = itemKey(cat.id, cat.items.length);
+      menuItemById.set(key, item);
+      corrections.push({ rowIndex, id: key });
+      console.log(`Availability sheet: created new item "${name}" as ${key}.`);
+    } else if (!item) {
+      console.warn(`Availability sheet: skipping row ${rowIndex + 2} — id "${rawId}" isn't a known existing item (a genuinely new item's id column should be just the category number, e.g. "1", not "${rawId}").`);
+      return;
+    } else if (name && name !== item.name) {
+      console.log(`Availability sheet: renamed item ${key} from "${item.name}" to "${name}".`);
+      item.name = name;
+    }
+
+    seenIds.add(key);
 
     const rawAvail = String(availableCell || '').trim().toLowerCase();
     if (['false', 'no', '0', 'out', 'sold out'].includes(rawAvail)) soldOut.add(key);
-
-    const item = menuItemById.get(key);
-    if (!item) continue; // unrecognized id — not something this build knows about
 
     if (item.sizes) {
       const regular = parseFloat(priceCell);
@@ -860,8 +935,35 @@ function applyMenuSheetRows(rows) {
       const price = parseFloat(priceCell);
       if (Number.isFinite(price) && price > 0) item.price = price;
     }
+  });
+
+  // Discontinue: an id previously confirmed present that's missing from
+  // THIS successful read is treated as "its row got deleted — remove the
+  // item." Guarded against a bad/partial read wiping the whole menu: if
+  // more than 30% of previously-known items vanish at once, that smells
+  // like something wrong with the READ, not a genuine bulk discontinue —
+  // skip removal entirely this cycle (keep everything, stale-but-safe) and
+  // alert the owner instead of silently emptying the menu.
+  if (knownSheetItemKeys.size > 0) {
+    const missing = [...knownSheetItemKeys].filter(k => !seenIds.has(k));
+    if (missing.length > knownSheetItemKeys.size * 0.3) {
+      console.error(`Availability sheet refresh: ${missing.length}/${knownSheetItemKeys.size} previously-known items missing at once — skipping item removal this cycle (suspected bad/partial read).`);
+      alertOwner('menu-sheet-mass-removal', `The Availability sheet refresh saw ${missing.length} of ${knownSheetItemKeys.size} known menu items disappear at once — that looked like a bad read rather than a real bulk discontinue, so no items were removed this cycle. If you really did delete that many rows on purpose, this will resolve itself next refresh — ignore this message.`);
+    } else {
+      for (const key of missing) {
+        const item = menuItemById.get(key);
+        if (!item) continue;
+        const cat = MENU.find(c => c.id === key.split('.')[0]);
+        const idx = cat && cat.items.indexOf(item);
+        if (cat && idx !== -1) cat.items.splice(idx, 1);
+        menuItemById.delete(key);
+        console.log(`Availability sheet: removed item ${key} ("${item.name}") — its row is gone from the sheet.`);
+      }
+    }
   }
-  return soldOut;
+  knownSheetItemKeys = seenIds;
+
+  return { soldOut, corrections };
 }
 
 // Case-insensitive substring match across all categories, for the owner-
@@ -926,8 +1028,29 @@ async function refreshMenuFromSheet() {
     // Only reassigned on a successful fetch — if the call above throws, we
     // never reach here, so both sold-out state AND prices fail open
     // (keep whatever was already in memory) rather than resetting to blank.
-    soldOutIds = applyMenuSheetRows(res.data.values || []);
+    const { soldOut, corrections } = applyMenuSheetRows(res.data.values || []);
+    soldOutIds = soldOut;
     jobSucceeded('refreshMenuFromSheet');
+
+    // Write back the real "categoryId.itemIndex" id for any row that was
+    // just created from a bare category-id row (see applyMenuSheetRows'
+    // contract comment) — best-effort/fire-and-forget, same as every other
+    // sheet write-through in this file: a customer-facing reply must never
+    // wait on it. If this write keeps failing, the row's id column still
+    // reads the bare category id next cycle too, which would create a
+    // second duplicate item — logged loudly so a sustained failure here is
+    // visible rather than silently duplicating menu items.
+    for (const { rowIndex, id } of corrections) {
+      const rowNumber = rowIndex + 2; // rows[] is 0-based from range A2:F — sheet row 2 is rows[0]
+      withTimeout(sheets.spreadsheets.values.update({
+        spreadsheetId: process.env.GOOGLE_SHEETS_ID,
+        range: `Availability!A${rowNumber}`,
+        valueInputOption: 'USER_ENTERED',
+        requestBody: { values: [[id]] },
+      }), 6000).catch(err => {
+        console.error(`Availability sheet: failed to write back corrected id "${id}" to row ${rowNumber} — this row will be treated as a new item again next refresh:`, err.message || err);
+      });
+    }
   } catch (err) {
     console.error('Menu sheet refresh failed (keeping previous prices/availability):', err.message || err);
     jobFailed('refreshMenuFromSheet', err);
@@ -3047,4 +3170,4 @@ if (require.main === module) {
 
 // For the replay-test harness (test/replay.test.js) only — production never
 // requires this file as a module, so these exports are inert otherwise.
-module.exports = { app, processWhatsAppMessage, dryRunSent, sessions, lastOrders, savedCarts, cartTotal, OWNER_NUMBERS, soldOutIds, sweepIdleSessions, replySummaryText };
+module.exports = { app, processWhatsAppMessage, dryRunSent, sessions, lastOrders, savedCarts, cartTotal, OWNER_NUMBERS, DRIVER_NUMBERS, soldOutIds, sweepIdleSessions, replySummaryText, MENU, applyMenuSheetRows, resetMenuSheetTrackingForTests };

@@ -1,0 +1,12 @@
+{
+  "name": "cancel-command-resets-session",
+  "from": "19990000007",
+  "turns": [
+    { "in": "1", "expectStep": "menu" },
+    { "in": "1", "expectStep": "item" },
+    { "in": "1", "expectStep": "quantity" },
+    { "in": "1", "expectStep": "notes" },
+    { "in": "0", "expectStep": "item", "expectCartLength": 1 },
+    { "in": "cancel", "expectStep": "language", "expectCartLength": 0, "expectReplyContains": "cancelled" }
+  ]
+}

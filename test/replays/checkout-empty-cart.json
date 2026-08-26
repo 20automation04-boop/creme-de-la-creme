@@ -1,0 +1,8 @@
+{
+  "name": "checkout-with-empty-cart",
+  "from": "19990000006",
+  "turns": [
+    { "in": "1", "expectStep": "menu" },
+    { "in": "done", "expectStep": "menu", "expectCartLength": 0, "expectReplyContains": "empty" }
+  ]
+}

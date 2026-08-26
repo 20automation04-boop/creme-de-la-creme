@@ -1,0 +1,9 @@
+{
+  "name": "bulk-quantity-shorthand",
+  "from": "19990000005",
+  "turns": [
+    { "in": "1", "expectStep": "menu" },
+    { "in": "1", "expectStep": "item" },
+    { "in": "3x2", "expectStep": "menu", "expectCartLength": 1, "expectCartTotal": 14, "expectReplyContains": "Added" }
+  ]
+}

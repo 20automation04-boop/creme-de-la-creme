@@ -1,0 +1,8 @@
+{
+  "name": "owner-soldout-and-instock-commands",
+  "from": "__OWNER__",
+  "turns": [
+    { "in": "soldout Vanilla Bean", "expectReplyContains": "sold out" },
+    { "in": "instock Vanilla Bean", "expectReplyContains": "back in stock" }
+  ]
+}

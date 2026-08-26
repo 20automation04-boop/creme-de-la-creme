@@ -5,7 +5,9 @@
   "main": "index.js",
   "scripts": {
     "start": "node index.js",
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "npm run test:replay",
+    "test:replay": "node --test test/*.test.js",
+    "predeploy": "npm run test:replay"
   },
   "keywords": [],
   "author": "",

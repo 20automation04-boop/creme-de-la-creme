@@ -1,0 +1,13 @@
+{
+  "name": "idle-expiry-then-resume",
+  "from": "19990000017",
+  "turns": [
+    { "in": "1", "expectStep": "menu" },
+    { "in": "1", "expectStep": "item" },
+    { "in": "1", "expectStep": "quantity" },
+    { "in": "1", "expectStep": "notes" },
+    { "in": "0", "expectStep": "item", "expectCartLength": 1 },
+    { "setLastMessageAtMsAgo": 1860000, "sweepIdle": true },
+    { "in": "yes", "expectStep": "menu", "expectCartLength": 1, "expectReplyContains": "Welcome back" }
+  ]
+}

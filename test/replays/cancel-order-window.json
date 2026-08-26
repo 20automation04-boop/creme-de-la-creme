@@ -1,0 +1,16 @@
+{
+  "name": "cancel-order-within-window",
+  "from": "19990000014",
+  "turns": [
+    { "in": "1", "expectStep": "menu" },
+    { "in": "1", "expectStep": "item" },
+    { "in": "1", "expectStep": "quantity" },
+    { "in": "1", "expectStep": "notes" },
+    { "in": "0", "expectStep": "item" },
+    { "in": "done", "expectStep": "mode" },
+    { "in": "pickup", "expectStep": "confirm" },
+    { "in": "yes", "expectStep": "language", "expectReplyContains": "confirmed!" },
+    { "in": "1", "expectStep": "menu" },
+    { "in": "cancel order", "expectReplyContains": "couldn't find that order" }
+  ]
+}

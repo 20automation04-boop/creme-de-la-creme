@@ -1,8 +1,26 @@
 // seed-availability.js
 // Run ONCE to create and populate the "Availability" tab in your Google
-// Sheet from your current menu. After that, you toggle items sold-out by
-// unchecking the checkbox in the sheet itself — you do NOT need to run this
-// again unless you add brand-new menu items to menu-data.js.
+// Sheet from your current menu. After that, the sheet is the live menu —
+// no code change or redeploy needed for any of this:
+//   - Reprice an item: edit its Price (or Large Price) cell.
+//   - Rename an item: edit its Item cell.
+//   - Mark sold out / back in stock: toggle its Available checkbox.
+//   - Add a brand-new item: add a new row. In the ID column put ONLY the
+//     category number (e.g. "1"), NOT "1.10" — the bot assigns the real
+//     item number itself and corrects the ID cell automatically within
+//     about 2 minutes (this is deliberate: a guessed item number that
+//     doesn't match its real position in the category would silently
+//     desync sold-out/cart tracking for it). Fill in Category (for your
+//     own reference — the bot doesn't read it) and Item; Price and
+//     Large Price work the same as any other row.
+//   - Discontinue an item: delete its whole row. (If more than ~30% of
+//     rows vanish in one edit, the bot assumes that's an accidental bad
+//     read rather than genuine bulk deletion and leaves the menu alone —
+//     safe against e.g. an accidental "select all, delete" — so mass
+//     discontinuing needs to happen a few items at a time, one refresh
+//     cycle apart.)
+// You only need to run this script again if the Availability tab gets
+// deleted entirely.
 //
 // Run with:  node seed-availability.js
 
@@ -69,13 +87,12 @@ async function main() {
     requestBody: { values: rows },
   });
 
-  console.log('✅ Availability tab created and populated (including Price/Large Price columns).');
+  console.log('✅ Availability tab created and populated.');
   console.log('   Next: open the sheet, select column D (Available), and use');
   console.log('   Insert > Checkbox to turn those TRUE/FALSE values into tappable');
-  console.log('   checkboxes. Uncheck an item to mark it sold out — the bot picks');
-  console.log('   up the change within about 2 minutes.');
-  console.log('   Same goes for columns E/F (Price / Large Price) — edit a number');
-  console.log('   there and the bot uses it instead of the price in menu-data.js.');
+  console.log('   checkboxes. From here the sheet IS the live menu — see the');
+  console.log('   comment at the top of this file for how to reprice, rename,');
+  console.log('   add, and discontinue items with no code change or redeploy.');
 }
 
 main().catch(err => {

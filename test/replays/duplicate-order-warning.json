@@ -1,0 +1,23 @@
+{
+  "name": "duplicate-order-soft-warning",
+  "from": "19990000011",
+  "turns": [
+    { "in": "1", "expectStep": "menu" },
+    { "in": "1", "expectStep": "item" },
+    { "in": "1", "expectStep": "quantity" },
+    { "in": "1", "expectStep": "notes" },
+    { "in": "0", "expectStep": "item", "expectCartLength": 1 },
+    { "in": "done", "expectStep": "mode" },
+    { "in": "pickup", "expectStep": "confirm" },
+    { "in": "yes", "expectStep": "language", "expectReplyContains": "confirmed!" },
+    { "in": "1", "expectStep": "menu" },
+    { "in": "1", "expectStep": "item" },
+    { "in": "1", "expectStep": "quantity" },
+    { "in": "1", "expectStep": "notes" },
+    { "in": "0", "expectStep": "item", "expectCartLength": 1 },
+    { "in": "done", "expectStep": "mode" },
+    { "in": "pickup", "expectStep": "confirm" },
+    { "in": "yes", "expectStep": "confirm", "expectCartLength": 1, "expectReplyContains": "couple minutes ago" },
+    { "in": "yes", "expectStep": "language", "expectReplyContains": "confirmed!" }
+  ]
+}
