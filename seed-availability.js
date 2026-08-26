@@ -23,14 +23,19 @@ async function main() {
     process.exit(1);
   }
 
-  // Build one row per menu item: [ID, Category, Item Name, Available]
+  // Build one row per menu item: [ID, Category, Item Name, Available, Price, Large Price]
   // ID is "categoryId.itemIndex" — this is what the bot actually checks
   // against, so it stays unambiguous even for items that share a name
   // across categories (e.g. "Strawberry" appears 4 times in this menu).
-  const rows = [['ID', 'Category', 'Item', 'Available']];
+  // Price/Large Price start out matching menu-data.js exactly — editing a
+  // number here overrides it going forward (Large Price only applies to
+  // items with sizes; leave it blank for flat-price items).
+  const rows = [['ID', 'Category', 'Item', 'Available', 'Price', 'Large Price']];
   MENU.forEach(cat => {
     cat.items.forEach((item, idx) => {
-      rows.push([`${cat.id}.${idx + 1}`, cat.category, item.name, true]);
+      const price = item.sizes ? item.sizes[0].price : item.price;
+      const large = item.sizes ? item.sizes[item.sizes.length - 1].price : '';
+      rows.push([`${cat.id}.${idx + 1}`, cat.category, item.name, true, price, large]);
     });
   });
 
@@ -59,16 +64,18 @@ async function main() {
   // Write all the rows
   await sheets.spreadsheets.values.update({
     spreadsheetId: process.env.GOOGLE_SHEETS_ID,
-    range: `Availability!A1:D${rows.length}`,
+    range: `Availability!A1:F${rows.length}`,
     valueInputOption: 'RAW',
     requestBody: { values: rows },
   });
 
-  console.log('✅ Availability tab created and populated.');
+  console.log('✅ Availability tab created and populated (including Price/Large Price columns).');
   console.log('   Next: open the sheet, select column D (Available), and use');
   console.log('   Insert > Checkbox to turn those TRUE/FALSE values into tappable');
   console.log('   checkboxes. Uncheck an item to mark it sold out — the bot picks');
   console.log('   up the change within about 2 minutes.');
+  console.log('   Same goes for columns E/F (Price / Large Price) — edit a number');
+  console.log('   there and the bot uses it instead of the price in menu-data.js.');
 }
 
 main().catch(err => {

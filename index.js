@@ -10,8 +10,10 @@ const { google } = require('googleapis');
 // Get these from your Chakra dashboard's WhatsApp Setup page:
 //   CHAKRA_API_KEY          - Admin > API Keys > create one > copy its Access Token
 //   CHAKRA_PLUGIN_ID        - WhatsApp Setup page > "..." menu > Copy Plugin Id
-//   CHAKRA_PHONE_NUMBER_ID  - WhatsApp Setup page > gear icon next to "WhatsApp
-//                             Phone Numbers" > Meta ID column
+//   CHAKRA_PHONE_NUMBER_ID  - WhatsApp Setup page > "WhatsApp Phone Numbers"
+//                             list > the "Phone Number" column's ID (NOT the
+//                             WABA column's ID — those are two different IDs
+//                             on the same row and easy to mix up)
 //   CHAKRA_API_VERSION      - optional, defaults to v24.0 if not set
 const CHAKRA_API_KEY = process.env.CHAKRA_API_KEY;
 const CHAKRA_PLUGIN_ID = process.env.CHAKRA_PLUGIN_ID;
@@ -24,8 +26,10 @@ function chakraSendUrl() {
 
 // Sends ONE WhatsApp message via Chakra's pass-through Messages API (same
 // shape as Meta's own Cloud API). `to` must be bare digits with country code
-// — no leading '+', no 'whatsapp:' prefix. `message` is a plain string, or
-// { text, mediaUrl } to send an image (with optional caption).
+// — no leading '+', no 'whatsapp:' prefix. `message` is a plain string,
+// { text, mediaUrl } to send an image (with optional caption),
+// { buttons: { body, buttons: [{id,title}] } } for up to 3 reply buttons, or
+// { list: { body, buttonLabel, sections } } for a native list message.
 async function sendWhatsAppMessage(to, message) {
   if (!CHAKRA_API_KEY || !CHAKRA_PLUGIN_ID || !CHAKRA_PHONE_NUMBER_ID) {
     console.error('Chakra credentials not fully configured — cannot send message.');
@@ -41,6 +45,30 @@ async function sendWhatsAppMessage(to, message) {
       to,
       type: 'image',
       image: { link: message.mediaUrl, ...(message.text ? { caption: message.text } : {}) },
+    };
+  } else if (message && message.buttons) {
+    const { body: bodyText, buttons } = message.buttons;
+    body = {
+      messaging_product: 'whatsapp',
+      to,
+      type: 'interactive',
+      interactive: {
+        type: 'button',
+        body: { text: bodyText },
+        action: { buttons: buttons.map(b => ({ type: 'reply', reply: { id: b.id, title: b.title } })) },
+      },
+    };
+  } else if (message && message.list) {
+    const { body: bodyText, buttonLabel, sections } = message.list;
+    body = {
+      messaging_product: 'whatsapp',
+      to,
+      type: 'interactive',
+      interactive: {
+        type: 'list',
+        body: { text: bodyText },
+        action: { button: buttonLabel, sections },
+      },
     };
   } else if (message && message.text) {
     body = { messaging_product: 'whatsapp', to, type: 'text', text: { body: message.text } };
@@ -64,12 +92,43 @@ async function sendWhatsAppMessage(to, message) {
   return res.json();
 }
 
+// Marks the inbound message as read (blue ticks) and, on API versions that
+// support it, shows the in-chat "typing..." indicator for a few seconds —
+// makes replies feel like a person is there instead of an instant bot dump.
+// Best-effort only: fire-and-forget from the caller, failures are just
+// logged since this is cosmetic and must never block or break a reply.
+async function markAsRead(messageId) {
+  if (!CHAKRA_API_KEY || !CHAKRA_PLUGIN_ID || !CHAKRA_PHONE_NUMBER_ID || !messageId) return;
+  try {
+    const res = await withTimeout(fetch(chakraSendUrl(), {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${CHAKRA_API_KEY}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        messaging_product: 'whatsapp',
+        status: 'read',
+        message_id: messageId,
+        typing_indicator: { type: 'text' },
+      }),
+    }), 5000);
+    if (!res.ok) {
+      const errText = await res.text().catch(() => '');
+      console.warn(`Mark-as-read failed for message ${messageId} (HTTP ${res.status}): ${errText}`);
+    }
+  } catch (err) {
+    console.warn(`Mark-as-read failed for message ${messageId}:`, err.message || err);
+  }
+}
+
 // Acks the inbound webhook IMMEDIATELY (Chakra/Meta will retry if your
 // response is slow), then sends the actual reply message(s) as separate,
 // asynchronous API calls. Unlike Twilio's TwiML, there is no way to reply
 // synchronously within the webhook response — every reply now uses the same
 // fire-and-forget pattern the proactive status-update code already used.
 function sendReply(res, to, textOrMessages) {
+  if (process.env.DEBUG_REPLIES) console.log(`REPLY >>> to ${to}:`, JSON.stringify(textOrMessages));
   if (!res.headersSent) res.sendStatus(200); // the webhook is usually already acked earlier — see app.post('/whatsapp')
   const messages = Array.isArray(textOrMessages) ? textOrMessages : [textOrMessages];
   (async () => {
@@ -78,6 +137,16 @@ function sendReply(res, to, textOrMessages) {
         await sendWhatsAppMessage(to, m);
       } catch (err) {
         console.error(`Failed to send WhatsApp message to ${to}:`, err.message || err);
+        // Interactive (buttons/list) messages carry a plain-text `fallback` —
+        // if Chakra/Meta rejects the interactive send for any reason, the
+        // customer still gets a usable menu instead of silence.
+        if (m && typeof m === 'object' && m.fallback) {
+          try {
+            await sendWhatsAppMessage(to, m.fallback);
+          } catch (err2) {
+            console.error(`Fallback send also failed for ${to}:`, err2.message || err2);
+          }
+        }
       }
     }
   })();
@@ -101,7 +170,11 @@ async function notifyDriver(orderNumber, session) {
 
   const total = session.cart.reduce((sum, i) => sum + i.price * i.qty, 0).toFixed(2);
 
-  const message = `🚚 *NEW DELIVERY ORDER #${orderNumber}*\n\n${itemLines}\n\n*Total to collect: $${total} BZD*\n\nDeliver to:\n${session.address}`;
+  const divider = '━━━━━━━━━━━━━━';
+
+  const message = session.language === 'es'
+    ? `🏍️ *NUEVA ORDEN DE ENTREGA #${orderNumber}*\n${divider}\n🛍️ *Artículos:*\n${itemLines}\n${divider}\n💵 *Total a cobrar: $${total} BZD*\n\n📍 *Entregar a:*\n${session.address}`
+    : `🏍️ *NEW DELIVERY ORDER #${orderNumber}*\n${divider}\n🛍️ *Items:*\n${itemLines}\n${divider}\n💵 *Total to collect: $${total} BZD*\n\n📍 *Deliver to:*\n${session.address}`;
 
   for (const driverNumber of DRIVER_NUMBERS) {
     try {
@@ -126,13 +199,13 @@ const STATUS_MESSAGES = {
   en: {
     'Preparing': (num) => `👨‍🍳 Update on order #${num}: we're preparing it now!`,
     'Ready for Pickup': (num) => `🎉 Order #${num} is ready for pickup!`,
-    'Out for Delivery': (num) => `🚚 Order #${num} is out for delivery!`,
+    'Out for Delivery': (num) => `🏍️ Order #${num} is out for delivery!`,
     'Completed': (num) => `✅ Order #${num} is complete. Thanks for ordering — enjoy!`,
   },
   es: {
     'Preparing': (num) => `👨‍🍳 Actualización de la orden #${num}: ¡la estamos preparando!`,
     'Ready for Pickup': (num) => `🎉 ¡La orden #${num} está lista para recoger!`,
-    'Out for Delivery': (num) => `🚚 ¡La orden #${num} va en camino!`,
+    'Out for Delivery': (num) => `🏍️ ¡La orden #${num} va en camino!`,
     'Completed': (num) => `✅ La orden #${num} está completa. ¡Gracias por tu compra!`,
   },
 };
@@ -330,13 +403,13 @@ function isDuplicateMessage(id) {
 // Lives in menu-data.js so it stays in sync with the availability seed script.
 const MENU = require('./menu-data.js');
 
-// ---- SOLD-OUT ITEM TRACKING ----
-// Availability lives in a "Availability" tab in the same Google Sheet, keyed
-// by "categoryId.itemIndex" (NOT by name — several items share a name across
-// categories, e.g. "Strawberry" appears in 4 different sections, so name
-// alone would be ambiguous). Read into memory on a timer, never on the
-// request path, so a slow/broken Sheets call can never delay or break a
-// WhatsApp reply — same lesson as the order-logging fix.
+// ---- SOLD-OUT ITEM TRACKING + SHEET-DRIVEN PRICE OVERRIDES ----
+// Availability (and now price) lives in a "Availability" tab in the same
+// Google Sheet, keyed by "categoryId.itemIndex" (NOT by name — several items
+// share a name across categories, e.g. "Strawberry" appears in 4 different
+// sections, so name alone would be ambiguous). Read into memory on a timer,
+// never on the request path, so a slow/broken Sheets call can never delay or
+// break a WhatsApp reply — same lesson as the order-logging fix.
 let soldOutIds = new Set();
 
 function itemKey(categoryId, itemIndex) {
@@ -347,29 +420,64 @@ function isItemSoldOut(categoryId, itemIndex) {
   return soldOutIds.has(itemKey(categoryId, itemIndex));
 }
 
-async function refreshAvailability() {
+// categoryId.itemIndex -> item object reference, built once from the static
+// menu-data.js structure. Only existing items can be price-overridden this
+// way — adding brand-new items isn't sheet-driven (see refreshMenuFromSheet).
+const menuItemById = new Map();
+MENU.forEach(cat => {
+  cat.items.forEach((item, idx) => menuItemById.set(itemKey(cat.id, idx + 1), item));
+});
+
+// Pure row-parsing logic, pulled out of the Sheets fetch so it can be
+// exercised with synthetic rows (no network/write) as well as real ones.
+// Mutates price directly onto the shared MENU item objects — every existing
+// read site (cart, checkout, size buttons, AI order text, etc.) already
+// reads item.price/item.sizes[i].price straight off MENU, so this is the
+// only place that needs to know sheet rows exist at all. A missing/invalid
+// price cell is skipped and the previous price kept (never let a typo'd
+// cell silently become $0 or NaN); once a price IS overridden this way,
+// clearing the cell does not revert it — retype the original number to
+// undo an override.
+function applyMenuSheetRows(rows) {
+  const soldOut = new Set();
+  for (const row of rows) {
+    const [id, , , availableCell, priceCell, largePriceCell] = row;
+    if (!id) continue;
+    const key = id.trim();
+
+    const rawAvail = String(availableCell || '').trim().toLowerCase();
+    if (['false', 'no', '0', 'out', 'sold out'].includes(rawAvail)) soldOut.add(key);
+
+    const item = menuItemById.get(key);
+    if (!item) continue; // unrecognized id — not something this build knows about
+
+    if (item.sizes) {
+      const regular = parseFloat(priceCell);
+      if (Number.isFinite(regular) && regular > 0) item.sizes[0].price = regular;
+      const large = parseFloat(largePriceCell);
+      if (Number.isFinite(large) && large > 0) item.sizes[item.sizes.length - 1].price = large;
+    } else {
+      const price = parseFloat(priceCell);
+      if (Number.isFinite(price) && price > 0) item.price = price;
+    }
+  }
+  return soldOut;
+}
+
+async function refreshMenuFromSheet() {
   if (!process.env.GOOGLE_SHEETS_ID) return;
   try {
     const res = await withTimeout(sheets.spreadsheets.values.get({
       spreadsheetId: process.env.GOOGLE_SHEETS_ID,
-      range: 'Availability!A2:D',
+      range: 'Availability!A2:F',
     }), 8000);
 
-    const rows = res.data.values || [];
-    const next = new Set();
-    for (const row of rows) {
-      const [id, , , availableCell] = row;
-      if (!id) continue;
-      const raw = String(availableCell || '').trim().toLowerCase();
-      const soldOut = ['false', 'no', '0', 'out', 'sold out'].includes(raw);
-      if (soldOut) next.add(id.trim());
-    }
-    soldOutIds = next;
+    // Only reassigned on a successful fetch — if the call above throws, we
+    // never reach here, so both sold-out state AND prices fail open
+    // (keep whatever was already in memory) rather than resetting to blank.
+    soldOutIds = applyMenuSheetRows(res.data.values || []);
   } catch (err) {
-    // Fail open: keep whatever list we already had rather than crashing or
-    // blocking anything. A missed refresh just means slightly stale
-    // availability until the next successful poll.
-    console.error('Availability refresh failed (keeping previous list):', err.message || err);
+    console.error('Menu sheet refresh failed (keeping previous prices/availability):', err.message || err);
   }
 }
 
@@ -392,19 +500,23 @@ async function pollOrderStatus() {
     const rows = res.data.values || [];
 
     if (!statusPollingInitialized) {
-      for (const row of rows) {
+      rows.forEach((row, i) => {
         const [orderNumber, , , , , , , status] = row;
-        if (orderNumber) lastKnownStatus.set(String(orderNumber), status || 'Confirmed');
-      }
+        if (orderNumber) lastKnownStatus.set(i, status || 'Confirmed');
+      });
       statusPollingInitialized = true;
       return;
     }
 
-    for (const row of rows) {
+    for (const [i, row] of rows.entries()) {
       const [orderNumber, , , , , language, phoneCell, statusCell] = row;
       if (!orderNumber) continue;
       const status = (statusCell || 'Confirmed').trim();
-      const key = String(orderNumber);
+      // Keyed by row position, not order number — two rows sharing the same
+      // order number (a stale duplicate, or a random 4-digit collision) must
+      // never be compared against each other's status, or they flip-flop
+      // forever, re-notifying the customer every poll cycle indefinitely.
+      const key = i;
       const previous = lastKnownStatus.get(key);
 
       if (previous === status) continue;
@@ -442,8 +554,8 @@ const MAX_QTY = 50;
 // ---- SHOP FACTS ----
 // EDIT THESE FOUR VALUES to your shop's real numbers before going live.
 const SHOP_INFO = {
-  hoursEn: 'Monday to Saturday, 9am to 6pm (closed Sundays)',
-  hoursEs: 'lunes a sábado, 9am a 6pm (cerrado domingos)',
+  hoursEn: 'open 24/7',
+  hoursEs: 'abierto 24/7',
   deliveryFee: 5,           // <-- EDIT: real delivery fee in $BZD
   minDeliveryOrder:  5 ,    // <-- EDIT: real minimum order for delivery in $BZD
   deliveryAreasEn: 'Belize City limits',   // <-- EDIT: real delivery area
@@ -452,7 +564,7 @@ const SHOP_INFO = {
   deliveryTimeEs: '30-45 minutos',
   paymentEn: 'Cash only or online, including cash on delivery.',
   paymentEs: 'Solo efectivo o enlinea, incluso contra entrega.',
-  phone: '+501 616-2492',
+  phone: '+501 606-9511',
 };
 
 // ---- STRUCTURED HOURS (for the open/closed check) ----
@@ -462,9 +574,9 @@ const SHOP_INFO = {
 // 24-hour time, e.g. 9 = 9am, 18 = 6pm.
 const SHOP_HOURS = {
   timezone: 'America/Belize',
-  openDays: [1, 2, 3, 4, 5, 6], // Mon–Sat, closed Sunday
-  openHour: 9,
-  closeHour: 18,
+  openDays: [0, 1, 2, 3, 4, 5, 6], // open every day
+  openHour: 0,
+  closeHour: 24,
 };
 
 const WEEKDAY_NAMES_EN = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
@@ -525,21 +637,25 @@ function nextOpeningText(lang) {
 // ---- LANGUAGE TEXT ----
 const TXT = {
   en: {
-    howToOrder: (menuList) => `🍧 *Créme De La Créme* 🍧
+    howToOrder: `🍧 *Créme De La Créme* 🍧
 
 *How to order:*
 1️⃣ Reply with a category number to browse
-2️⃣ Or just type what you want, e.g. "2 hot dogs and a large mango smoothie, no ice"
+2️⃣ Or just type what you want, e.g. "2 hot dogs, no onion, and a large mango smoothie, extra ice"
 3️⃣ Ask us anything — hours, delivery, payment methods
 4️⃣ You can add more items any time, even mid-order — nothing locks in until you confirm ✅
 
 *cart* = view your order
 *repeat* = reorder your last order
 *done* = checkout
+*back* = go back a step
+*cancel* = cancel your order
+*status* = check your last order's status
+*agent* = talk to a real person
 *help* = show these instructions again
-*language* = change language
-
-${menuList}`,
+*language* = change language`,
+    menuButtonPrompt: 'Tap below whenever you\'re ready to see the menu 👇',
+    menuButtonTitle: 'View Menu 📋',
     mainMenu: (menuList) => `🍧 *Créme De La Créme* 🍧\nReply with a number, or type your order:\n\n${menuList}\n\n*cart* = view order   *done* = checkout   *help* = instructions`,
     cartEmpty: 'Your cart is empty.',
     cartHeader: '🛒 *Your order:*',
@@ -555,10 +671,10 @@ ${menuList}`,
     invalidSize: 'Please reply with a valid size number.',
     askNotes: 'Any special requests for this item? (extra ice, no onions, etc.) Type *none* if not.',
     cartEmptyCheckout: "Cart's empty — pick something first!",
-    askMode: (fee) => `Pickup 📦 or delivery 🚚? (Delivery is $${fee} BZD)`,
+    askMode: (fee) => `Pickup 📦 or delivery 🏍️? (Delivery is $${fee} BZD)`,
     pickupConfirm: '📦 Pickup order. Confirm? (yes/no)',
-    askAddress: (fee) => `🚚 What's the delivery address and a contact number?\n(Delivery fee: $${fee} BZD)`,
-    deliveryConfirm: (addr) => `🚚 Delivery to: ${addr}\n\nConfirm order? (yes/no)`,
+    askAddress: (fee) => `🏍️ What's the delivery address 📍 and a contact number?\n(Delivery fee: $${fee} BZD)`,
+    deliveryConfirm: (addr) => `🏍️ Delivery to: ${addr}\n\nConfirm order? (yes/no)`,
     askModeInvalid: "Please reply 'pickup' or 'delivery'.",
     orderConfirmed: (num, phone) => `🎉 Order #${num} confirmed! Thank you!\n\nWe'll be in touch shortly.\n\n📞 Need anything else? Call us at ${phone}.`,
     orderCancelled: 'Order cancelled.',
@@ -570,23 +686,36 @@ ${menuList}`,
     closedCheckout: (hours, nextOpen) => `😴 We're closed right now, so we can't take your order just yet.\nHours: ${hours}\nWe'll reopen ${nextOpen} — your cart is saved, just type *done* again once we're open!`,
     soldOutItem: (name) => `😔 Sorry, ${name} is sold out right now.`,
     noPreviousOrder: "You don't have a previous order to repeat yet — let's start one! 😊",
+    idleStillThere: "👋 Still with me? Your cart's saved whenever you're ready to continue.",
+    idleConfirmPrompt: "🧾 Ready to place this order? Reply *YES* to confirm.",
+    idleHold: "⏳ Still holding your order — I'll keep your cart saved for about 20 more minutes.",
+    idleExpired: "🕐 Didn't want to keep bugging you, so I saved your cart! Want to continue where you left off? Reply *YES* to resume, or type *MENU* to start fresh.",
+    resumeOffer: "👋 Want to continue your earlier order? Reply *YES* to resume, or type *MENU* to start fresh.",
+    resumeRestored: (cart) => `✅ Welcome back! Your cart is restored:\n\n${cart}`,
+    agentRequested: (phone) => `📞 Got it — connecting you with our team, someone will reach out shortly. You can also call us directly at ${phone}.`,
+    statusReply: (num, status) => `📦 Order #${num}: *${status}*`,
+    statusUnavailable: (phone) => `Sorry, I couldn't look up your order status right now — please call us at ${phone}.`,
   },
   es: {
-    howToOrder: (menuList) => `🍧 *Créme De La Créme* 🍧
+    howToOrder: `🍧 *Créme De La Créme* 🍧
 
 *Cómo ordenar:*
 1️⃣ Responde con el número de una categoría para explorar
-2️⃣ O simplemente escribe lo que quieres, ej. "2 hot dogs y un smoothie grande de mango, sin hielo"
+2️⃣ O simplemente escribe lo que quieres, ej. "2 hot dogs, sin cebolla, y un smoothie grande de mango, con hielo extra"
 3️⃣ Pregúntanos lo que sea — horario, entregas, formas de pago
 4️⃣ Puedes añadir más artículos en cualquier momento, incluso a mitad de la orden — nada queda fijo hasta que confirmes ✅
 
 *cart* = ver tu orden
 *repeat* = repetir tu última orden
 *done* = finalizar
+*back* = volver un paso
+*cancel* = cancelar tu orden
+*status* = ver el estado de tu última orden
+*agent* = hablar con una persona real
 *help* = ver estas instrucciones otra vez
-*language* = cambiar idioma
-
-${menuList}`,
+*language* = cambiar idioma`,
+    menuButtonPrompt: 'Toca abajo cuando quieras ver el menú 👇',
+    menuButtonTitle: 'Ver Menú 📋',
     mainMenu: (menuList) => `🍧 *Créme De La Créme* 🍧\nResponde con un número, o escribe tu orden:\n\n${menuList}\n\n*cart* = ver orden   *done* = finalizar   *help* = instrucciones`,
     cartEmpty: 'Tu carrito está vacío.',
     cartHeader: '🛒 *Tu orden:*',
@@ -602,10 +731,10 @@ ${menuList}`,
     invalidSize: 'Responde con un número de tamaño válido.',
     askNotes: '¿Alguna petición especial para este artículo? (extra hielo, sin cebolla, etc.) Escribe *ninguno* si no.',
     cartEmptyCheckout: '¡Carrito vacío, elige algo primero!',
-    askMode: (fee) => `¿Recoger 📦 o entrega 🚚? (La entrega cuesta $${fee} BZD)`,
+    askMode: (fee) => `¿Recoger 📦 o entrega 🏍️? (La entrega cuesta $${fee} BZD)`,
     pickupConfirm: '📦 Orden para recoger. ¿Confirmas? (si/no)',
-    askAddress: (fee) => `🚚 ¿Cuál es la dirección de entrega y un número de contacto?\n(Costo de entrega: $${fee} BZD)`,
-    deliveryConfirm: (addr) => `🚚 Entrega a: ${addr}\n\n¿Confirmas la orden? (si/no)`,
+    askAddress: (fee) => `🏍️ ¿Cuál es la dirección de entrega 📍 y un número de contacto?\n(Costo de entrega: $${fee} BZD)`,
+    deliveryConfirm: (addr) => `🏍️ Entrega a: ${addr}\n\n¿Confirmas la orden? (si/no)`,
     askModeInvalid: "Responde 'recoger' o 'entrega'.",
     orderConfirmed: (num, phone) => `🎉 ¡Orden #${num} confirmada! ¡Gracias!\n\nNos pondremos en contacto pronto.\n\n📞 ¿Necesitas algo más? Llámanos al ${phone}.`,
     orderCancelled: 'Orden cancelada.',
@@ -617,6 +746,15 @@ ${menuList}`,
     closedCheckout: (hours, nextOpen) => `😴 Estamos cerrados en este momento, así que no podemos tomar tu orden todavía.\nHorario: ${hours}\nAbrimos de nuevo ${nextOpen} — tu carrito está guardado, solo escribe *done* otra vez cuando abramos!`,
     soldOutItem: (name) => `😔 Lo sentimos, ${name} está agotado en este momento.`,
     noPreviousOrder: 'Aún no tienes una orden anterior para repetir — ¡empecemos una! 😊',
+    idleStillThere: '👋 ¿Sigues ahí? Tu carrito está guardado para cuando quieras continuar.',
+    idleConfirmPrompt: '🧾 ¿Listo para confirmar esta orden? Responde *SI* para confirmar.',
+    idleHold: '⏳ Todavía tenemos tu orden guardada — la mantendremos unos 20 minutos más.',
+    idleExpired: '🕐 No queríamos seguir molestándote, ¡así que guardamos tu carrito! ¿Quieres continuar donde lo dejaste? Responde *SI* para continuar, o escribe *MENU* para empezar de nuevo.',
+    resumeOffer: '👋 ¿Quieres continuar tu orden anterior? Responde *SI* para continuar, o escribe *MENU* para empezar de nuevo.',
+    resumeRestored: (cart) => `✅ ¡Bienvenido de nuevo! Tu carrito fue restaurado:\n\n${cart}`,
+    agentRequested: (phone) => `📞 Listo — te estamos conectando con nuestro equipo, alguien se comunicará pronto. También puedes llamarnos directamente al ${phone}.`,
+    statusReply: (num, status) => `📦 Orden #${num}: *${status}*`,
+    statusUnavailable: (phone) => `Lo sentimos, no pudimos consultar el estado de tu orden ahora — por favor llámanos al ${phone}.`,
   },
 };
 
@@ -629,6 +767,12 @@ const sessions = {};
 // line's categoryId/itemIndex so sold-out status can be re-checked against
 // TODAY's availability, not just blindly re-added.
 const lastOrders = {};
+
+// ---- SAVED (ABANDONED) CART STORAGE ----
+// Keyed by phone number. Populated when sweepIdleSessions() expires a session
+// with a non-empty cart (~30 min idle) — see below. In-memory, same
+// restart/no-persistence tradeoff as `sessions` and `lastOrders`.
+const savedCarts = {};
 
 function newSession() {
   return {
@@ -643,12 +787,86 @@ function newSession() {
     pendingItemIndex: null,
     mode: null,
     address: null,
+    lastMessageAt: Date.now(),
+    nudgeStage: 0, // 0 = none sent, 1 = ~3min nudge sent, 2 = ~10min hold sent — see sweepIdleSessions()
+    pendingResume: false, // true right after a saved cart is offered back to the customer
   };
 }
 
 function getSession(from) {
   if (!sessions[from]) sessions[from] = newSession();
   return sessions[from];
+}
+
+// ---- IDLE-SESSION SWEEP (staged nudges, hold warning, graceful expiry) ----
+// Runs off a setInterval (see app.listen below), same non-request-path
+// pattern as refreshMenuFromSheet/pollOrderStatus. Only nudges sessions that
+// actually have something at stake (a non-empty cart) — an empty session
+// that only said "hi" gets silently garbage-collected instead of pestered.
+const IDLE_NUDGE_MS = 3 * 60 * 1000;   // ~3 min: "still with me?" / confirm-prompt
+const IDLE_HOLD_MS = 10 * 60 * 1000;   // ~10 min: "holding your order..."
+const IDLE_EXPIRE_MS = 30 * 60 * 1000; // ~30 min: save cart + offer resume next time
+const SAVED_CART_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000; // prune very old unclaimed saved carts
+
+function sweepIdleSessions() {
+  const now = Date.now();
+
+  for (const from of Object.keys(sessions)) {
+    const session = sessions[from];
+    if (!session || !session.lastMessageAt) continue;
+    const idleMs = now - session.lastMessageAt;
+
+    if (session.cart.length === 0) {
+      // A pendingResume session is deliberately left with an empty cart (its
+      // items live in savedCarts instead) — never garbage-collect it just
+      // for being idle, or the "want to continue?" offer silently vanishes
+      // while savedCarts still thinks it's live. That pairing is cleaned up
+      // together in the savedCarts prune pass below instead.
+      if (idleMs >= IDLE_EXPIRE_MS && !session.pendingResume) delete sessions[from];
+      continue;
+    }
+
+    const lang = session.language || 'en';
+    const t = TXT[lang];
+
+    if (idleMs >= IDLE_EXPIRE_MS) {
+      savedCarts[from] = {
+        cart: session.cart.map(item => ({ ...item })),
+        mode: session.mode,
+        address: session.address,
+        savedAt: now,
+      };
+      const preservedLanguage = session.language;
+      sessions[from] = newSession();
+      sessions[from].language = preservedLanguage;
+      sessions[from].pendingResume = true;
+      sendWhatsAppMessage(from, t.idleExpired).catch(err => console.error(`Idle-expiry message failed for ${from}:`, err.message || err));
+      continue;
+    }
+
+    if (idleMs >= IDLE_HOLD_MS && session.nudgeStage < 2) {
+      session.nudgeStage = 2;
+      sendWhatsAppMessage(from, t.idleHold).catch(err => console.error(`Idle-hold nudge failed for ${from}:`, err.message || err));
+      continue;
+    }
+
+    if (idleMs >= IDLE_NUDGE_MS && session.nudgeStage < 1) {
+      session.nudgeStage = 1;
+      // Cart is complete but unconfirmed — nudge the action (confirm),
+      // not the silence, per the product spec for this stage.
+      const message = session.step === 'confirm' ? t.idleConfirmPrompt : t.idleStillThere;
+      sendWhatsAppMessage(from, message).catch(err => console.error(`Idle nudge failed for ${from}:`, err.message || err));
+    }
+  }
+
+  for (const from of Object.keys(savedCarts)) {
+    if (now - savedCarts[from].savedAt > SAVED_CART_MAX_AGE_MS) {
+      delete savedCarts[from];
+      // Clean up the paired empty pendingResume shell left in `sessions`
+      // (see above) at the same time, now that there's nothing left to resume.
+      if (sessions[from] && sessions[from].pendingResume) delete sessions[from];
+    }
+  }
 }
 
 // ---- CART HELPERS ----
@@ -691,7 +909,22 @@ function menuListText() {
 }
 
 function welcomeText(lang) {
-  return TXT[lang].howToOrder(menuListText());
+  return TXT[lang].howToOrder;
+}
+
+// Single-button prompt sent right after the how-to-order text — tapping it
+// sends id 'menu', which the main switch already treats identically to
+// typing "menu" (see the early menu/hi/hello check), so no other change
+// is needed to wire it up.
+function menuButtonMessage(lang) {
+  const t = TXT[lang];
+  return {
+    buttons: {
+      body: t.menuButtonPrompt,
+      buttons: [{ id: 'menu', title: t.menuButtonTitle }],
+    },
+    fallback: t.menuButtonPrompt,
+  };
 }
 
 function mainMenuText(lang) {
@@ -722,6 +955,116 @@ function categoryItemsText(cat, lang) {
   text += TXT[lang].backHint;
   text += TXT[lang].bulkHint;
   return text;
+}
+
+// ---- INTERACTIVE (BUTTONS/LIST) BUILDERS ----
+// Row/button ids are chosen to exactly match the tokens the switch statement
+// below already accepts from typed text (category id, item index, size key,
+// "pickup"/"delivery", "yes"/"no") — see the `type === 'interactive'` inbound
+// branch above. Every builder also carries a `fallback` (plain text/string,
+// using the existing *Text builders) that sendReply sends automatically if
+// the interactive send itself fails — see sendReply's catch block.
+const LIST_ROW_TITLE_MAX = 24;
+const LIST_ROW_DESC_MAX = 72;
+
+function truncateForRow(name) {
+  if (name.length <= LIST_ROW_TITLE_MAX) return { title: name, full: null };
+  return { title: name.slice(0, LIST_ROW_TITLE_MAX - 1) + '…', full: name };
+}
+
+// Categories 1-7 are drinks, 8-11 are food (menu-data.js order). Split this
+// way — rather than any other grouping — because Meta list messages cap at
+// 10 rows total and MENU has 11 categories, so one list can't hold them all.
+function categoryListMessages(lang) {
+  const toRows = cats => cats.map(cat => ({ id: cat.id, title: cat.category }));
+  const buttonLabel = lang === 'es' ? 'Ver categoría' : 'View category';
+  return [
+    {
+      list: {
+        body: lang === 'es' ? '🍹 Bebidas' : '🍹 Drinks Menu',
+        buttonLabel,
+        sections: [{ rows: toRows(MENU.filter(c => Number(c.id) <= 7)) }],
+      },
+      fallback: mainMenuText(lang), // carries the FULL text menu (both drinks & food) so the second list below doesn't need its own fallback
+    },
+    {
+      list: {
+        body: lang === 'es' ? '🍔 Comida' : '🍔 Food Menu',
+        buttonLabel,
+        sections: [{ rows: toRows(MENU.filter(c => Number(c.id) > 7)) }],
+      },
+    },
+  ];
+}
+
+function categoryItemsListMessage(cat, lang) {
+  const soldOutNames = [];
+  const rows = [];
+  cat.items.forEach((item, i) => {
+    if (isItemSoldOut(cat.id, i + 1)) {
+      soldOutNames.push(item.name);
+      return;
+    }
+    const priceText = item.sizes
+      ? `$${item.sizes[0].price.toFixed(2)}–$${item.sizes[item.sizes.length - 1].price.toFixed(2)}`
+      : `$${item.price.toFixed(2)}`;
+    const { title, full } = truncateForRow(item.name);
+    const description = ((full ? `${full} — ` : '') + priceText).slice(0, LIST_ROW_DESC_MAX);
+    rows.push({ id: String(i + 1), title, description });
+  });
+
+  if (rows.length === 0) return categoryItemsText(cat, lang); // everything's sold out — plain text already explains that per item
+
+  const soldOutNote = soldOutNames.length > 0
+    ? (lang === 'es' ? `❌ Agotado hoy: ${soldOutNames.join(', ')}\n\n` : `❌ Sold out today: ${soldOutNames.join(', ')}\n\n`)
+    : '';
+
+  return {
+    list: {
+      body: `${soldOutNote}*${cat.category}*`,
+      buttonLabel: lang === 'es' ? 'Elegir artículo' : 'Select Item',
+      sections: [{ rows }],
+    },
+    fallback: categoryItemsText(cat, lang),
+  };
+}
+
+function sizeButtonsMessage(item, lang) {
+  const body = TXT[lang].askSize(item.name, item.sizes);
+  return {
+    buttons: {
+      body,
+      buttons: item.sizes.map(s => ({ id: s.key, title: `${s.label} - $${s.price.toFixed(2)}`.slice(0, 20) })),
+    },
+    fallback: body,
+  };
+}
+
+function modeButtonsMessage(fee, lang) {
+  const body = TXT[lang].askMode(fee);
+  return {
+    buttons: {
+      body,
+      buttons: [
+        { id: 'pickup', title: lang === 'es' ? 'Recoger 📦' : 'Pickup 📦' },
+        { id: 'delivery', title: lang === 'es' ? 'Entrega 🏍️' : 'Delivery 🏍️' },
+      ],
+    },
+    fallback: body,
+  };
+}
+
+function confirmButtonsMessage(bodyText, lang) {
+  return {
+    buttons: {
+      body: bodyText,
+      buttons: [
+        { id: 'yes', title: lang === 'es' ? 'Sí ✅' : 'Yes ✅' },
+        { id: 'no', title: lang === 'es' ? 'No ❌' : 'No ❌' },
+      ],
+    },
+    fallback: bodyText,
+  };
 }
 
 function withTimeout(promise, ms) {
@@ -891,8 +1234,15 @@ Respond with ONLY raw JSON, no markdown, no explanation, in this exact shape:
 `.trim();
 
   try {
+    // temperature: 0 — this is menu-item matching, not creative writing;
+    // an ambiguous compound order like "1 mango and 1 mango pine" needs the
+    // same correct split every time, not sampling variance between calls.
     const result = await withTimeout(
-      genAI.models.generateContent({ model: 'gemini-3.1-flash-lite', contents: prompt }),
+      genAI.models.generateContent({
+        model: 'gemini-3.1-flash-lite',
+        contents: prompt,
+        config: { temperature: 0 },
+      }),
       8000
     );
     const text = result.text.trim()
@@ -964,9 +1314,41 @@ async function attemptFreeOrder(rawMsg, session) {
     matches = result.matches;
     answer = result.answer;
   }
+  // Neither direct match nor the AI found a confident match — before giving
+  // up, check whether the message is a short/partial name that's genuinely
+  // ambiguous between two or more real items (e.g. "homemade" matches both
+  // "Homemade Cheese Dip" and "Ground Steak & Homemade Dip"). Silently
+  // adding nothing here is exactly why that case slipped through before —
+  // the customer sees no clear reason their item never made it into the cart.
+  if (matches.length === 0 && !answer) {
+    const ambiguous = findAmbiguousItemNames(rawMsg);
+    if (ambiguous.length >= 2) {
+      const list = ambiguous.map((n, i) => `${i + 1}. ${n}`).join('\n');
+      answer = session.language === 'es'
+        ? `Podría ser varias cosas:\n${list}\n\n¿Cuál quisiste decir?`
+        : `That could be a few different things:\n${list}\n\nWhich one did you mean?`;
+    }
+  }
   if (matches.length === 0) return { added: [], soldOut: [], answer };
   const { added, soldOut } = applyMatchesToCart(session, matches);
   return { added, soldOut, answer: null };
+}
+
+// Reverse of findDirectMatches's substring check — here the CUSTOMER'S text
+// is short (e.g. a single word) and might be a partial match INSIDE one or
+// more full item names, rather than the other way around. Only meaningful
+// as a genuine ambiguity signal when it hits 2+ items; a single hit means
+// the AI should have matched it directly, so this isn't a fallback matcher.
+function findAmbiguousItemNames(rawMsg) {
+  const q = rawMsg.trim().toLowerCase();
+  if (q.length < 3) return [];
+  const hits = [];
+  MENU.forEach(cat => {
+    cat.items.forEach(item => {
+      if (item.name.toLowerCase().includes(q)) hits.push(item.name);
+    });
+  });
+  return hits;
 }
 
 // Combines an attemptFreeOrder result into a reply fragment: sold-out
@@ -1038,6 +1420,7 @@ app.post('/whatsapp', async (req, res) => {
   // check above exists to make harmless. sendReply()'s own ack becomes a
   // no-op once headers are already sent (see its headersSent guard).
   res.sendStatus(200);
+  markAsRead(message.id); // fire-and-forget, purely cosmetic — never awaited
   withSessionLock(from, () => processWhatsAppMessage(message, res)).catch(err => {
     console.error('Unhandled error processing message:', err);
   });
@@ -1047,6 +1430,8 @@ async function processWhatsAppMessage(message, res) {
   const from = message.from; // bare digits with country code, e.g. "50161234567" — no '+', already validated above
   try {
     const session = getSession(from);
+    session.lastMessageAt = Date.now();
+    session.nudgeStage = 0; // any real inbound message clears pending idle-nudge state
     const knownLang = session.language;
     const bilingual = (en, es) => (knownLang === 'es' ? es : knownLang === 'en' ? en : `${en} / ${es}`);
 
@@ -1054,6 +1439,14 @@ async function processWhatsAppMessage(message, res) {
 
     if (message.type === 'text') {
       rawMsg = ((message.text && message.text.body) || '').trim();
+    } else if (message.type === 'interactive') {
+      // Button/list taps arrive here instead of as typed text. Reply/row ids
+      // are deliberately chosen (see the *ButtonsMessage/*ListMessage builders)
+      // to equal the exact tokens the switch statement below already accepts
+      // from free text (category id, item index, size key, "pickup"/"delivery",
+      // "yes"/"no") — so feeding the id in as rawMsg needs no other changes.
+      const inter = message.interactive || {};
+      rawMsg = (inter.button_reply && inter.button_reply.id) || (inter.list_reply && inter.list_reply.id) || '';
     } else if (message.type === 'audio') {
       const mediaId = message.audio && message.audio.id;
       const mimeType = (message.audio && message.audio.mime_type) || '';
@@ -1088,6 +1481,7 @@ async function processWhatsAppMessage(message, res) {
 
     if (msg === 'cancel' || msg === 'cancelar') {
       const lang = session.language || 'en';
+      delete savedCarts[from];
       sessions[from] = newSession();
       return sendReply(res, from, lang === 'es'
         ? 'Orden cancelada ❌. Escribe *menu* para empezar de nuevo.'
@@ -1098,17 +1492,55 @@ async function processWhatsAppMessage(message, res) {
       if (msg === '1' || msg === 'english' || msg === 'en') {
         session.language = 'en';
         session.step = 'menu';
-        return sendReply(res, from, withClosedBanner(welcomeText('en'), 'en'));
+        return sendReply(res, from, [withClosedBanner(welcomeText('en'), 'en'), menuButtonMessage('en')]);
       }
       if (msg === '2' || msg === 'español' || msg === 'espanol' || msg === 'es') {
         session.language = 'es';
         session.step = 'menu';
-        return sendReply(res, from, withClosedBanner(welcomeText('es'), 'es'));
+        return sendReply(res, from, [withClosedBanner(welcomeText('es'), 'es'), menuButtonMessage('es')]);
       }
       return sendReply(res, from, '🍧 *Créme De La Créme* 🍧\n\nChoose your language / Elige tu idioma:\n1. English\n2. Español');
     }
     const lang = session.language;
     const t = TXT[lang];
+
+    // ---- RESUME OFFER (abandoned cart from a prior session) ----
+    // Set by sweepIdleSessions() when a session with items expires (~30 min
+    // idle) — it saves the cart to savedCarts[from] and flags this session
+    // pendingResume so the very next message, whenever it arrives, is
+    // treated as an answer to "want to continue?" instead of guessed at.
+    if (session.pendingResume) {
+      const saved = savedCarts[from];
+      if (!saved) {
+        session.pendingResume = false; // stale flag, nothing to resume — fall through to normal handling
+      } else if (msg === 'yes' || msg === 'si' || msg === 'sí' || msg === 'resume' || msg === 'continuar') {
+        const soldOutLines = [];
+        const restoredCart = [];
+        saved.cart.forEach(item => {
+          if (item.categoryId != null && item.itemIndex != null && isItemSoldOut(item.categoryId, item.itemIndex)) {
+            soldOutLines.push(t.soldOutItem(item.name));
+          } else {
+            restoredCart.push(item);
+          }
+        });
+        session.cart = restoredCart;
+        session.mode = saved.mode;
+        session.address = saved.address;
+        session.step = 'menu';
+        session.pendingResume = false;
+        delete savedCarts[from];
+        const bits = [];
+        if (soldOutLines.length > 0) bits.push(soldOutLines.join('\n'));
+        bits.push(t.resumeRestored(cartText(session.cart, lang)));
+        return sendReply(res, from, [bits.join('\n\n'), ...categoryListMessages(lang)]);
+      } else if (msg === 'menu' || msg === 'no' || msg === 'cancel' || msg === 'cancelar') {
+        session.pendingResume = false;
+        delete savedCarts[from];
+        // Don't return — let the normal "menu"/global handling below run too.
+      } else {
+        return sendReply(res, from, t.resumeOffer);
+      }
+    }
 
     if (msg === 'language' || msg === 'idioma' || msg === 'lang') {
       session.language = null;
@@ -1120,9 +1552,41 @@ async function processWhatsAppMessage(message, res) {
       return sendReply(res, from, welcomeText(lang));
     }
 
+    if (msg === 'agent' || msg === 'agente' || msg === 'human' || msg === 'humano') {
+      const cartSummary = session.cart.length > 0 ? `\n\n${cartText(session.cart, lang)}` : '';
+      const staffMsg = `🔔 Customer +${from} requested a human agent (step: ${session.step}).${cartSummary}`;
+      DRIVER_NUMBERS.forEach(num => {
+        sendWhatsAppMessage(num, staffMsg).catch(err => console.error(`Agent-escalation notify failed for ${num}:`, err.message || err));
+      });
+      return sendReply(res, from, t.agentRequested(SHOP_INFO.phone));
+    }
+
+    if (msg === 'status' || msg === 'estado') {
+      const last = lastOrders[from];
+      if (!last || !last.orderNumber) {
+        return sendReply(res, from, t.noPreviousOrder);
+      }
+      try {
+        const statusRes = await withTimeout(sheets.spreadsheets.values.get({
+          spreadsheetId: process.env.GOOGLE_SHEETS_ID,
+          range: 'Manager!A2:H',
+        }), 8000);
+        const rows = statusRes.data.values || [];
+        let foundStatus = null;
+        for (const row of rows) {
+          const [orderNumber, , , , , , , statusCell] = row;
+          if (String(orderNumber) === String(last.orderNumber)) foundStatus = (statusCell || 'Confirmed').trim();
+        }
+        return sendReply(res, from, t.statusReply(last.orderNumber, foundStatus || 'Confirmed'));
+      } catch (err) {
+        console.error('Status lookup failed:', err.message || err);
+        return sendReply(res, from, t.statusUnavailable(SHOP_INFO.phone));
+      }
+    }
+
     if (msg === 'hola' || msg === 'hi' || msg === 'hello' || msg === 'menu' || msg === 'start') {
       session.step = 'menu';
-      return sendReply(res, from, withClosedBanner(mainMenuText(lang), lang));
+      return sendReply(res, from, [withClosedBanner('', lang), ...categoryListMessages(lang)]);
     }
 
     let reply = '';
@@ -1133,13 +1597,13 @@ async function processWhatsAppMessage(message, res) {
         if (cat) {
           session.currentCategory = cat.id;
           session.step = 'item';
-          reply = categoryItemsText(cat, lang);
+          reply = categoryItemsListMessage(cat, lang);
         } else if (msg === 'cart' || msg === 'carrito') {
           reply = cartText(session.cart, lang);
         } else if (msg === 'repeat' || msg === 'repetir') {
           const last = lastOrders[from];
           if (!last || last.cart.length === 0) {
-            reply = `${t.noPreviousOrder}\n\n` + mainMenuText(lang);
+            reply = [t.noPreviousOrder, ...categoryListMessages(lang)];
           } else {
             const addedLines = [];
             const soldOutLines = [];
@@ -1159,12 +1623,13 @@ async function processWhatsAppMessage(message, res) {
 
             reply = [
               bits.length > 0 ? bits.join('\n\n') : t.noPreviousOrder,
-              `${t.askConfirmNudge}\n\n${mainMenuText(lang)}`,
+              t.askConfirmNudge,
+              ...categoryListMessages(lang),
             ];
           }
         } else if (msg === 'done' || msg === 'listo' || msg === 'checkout') {
           if (session.cart.length === 0) {
-            reply = `${t.cartEmptyCheckout}\n\n` + mainMenuText(lang);
+            reply = [t.cartEmptyCheckout, ...categoryListMessages(lang)];
           } else if (!isShopOpen()) {
             // Cart stays intact and session.step stays 'menu' — they can keep
             // adding items or just come back and type "done" once open.
@@ -1172,7 +1637,7 @@ async function processWhatsAppMessage(message, res) {
             reply = t.closedCheckout(hours, nextOpeningText(lang));
           } else {
             session.step = 'mode';
-            reply = `${cartText(session.cart, lang)}\n\n${t.askMode(SHOP_INFO.deliveryFee)}`;
+            reply = [cartText(session.cart, lang), modeButtonsMessage(SHOP_INFO.deliveryFee, lang)];
           }
         } else {
           const faqKey = matchFAQKeyword(msg);
@@ -1188,7 +1653,8 @@ async function processWhatsAppMessage(message, res) {
             // nudge asking if they want more or are ready to confirm/checkout.
             reply = [
               orderResultText(orderResult, session, lang),
-              `${t.askConfirmNudge}\n\n${mainMenuText(lang)}`,
+              t.askConfirmNudge,
+              ...categoryListMessages(lang),
             ];
           } else if (orderResult.answer) {
             // Not a recognized order — fall back to the FAQ-style AI answer
@@ -1206,7 +1672,29 @@ async function processWhatsAppMessage(message, res) {
 
         if (msg === '0' || msg === 'atras' || msg === 'back') {
           session.step = 'menu';
-          reply = mainMenuText(lang);
+          reply = categoryListMessages(lang);
+          break;
+        }
+
+        // Same shortcuts as the top-level menu step — needed here now that
+        // adding an item keeps them inside the category (see the 'notes'
+        // case) instead of bouncing back out to the category list each time,
+        // so "done"/"cart" must work mid-category too.
+        if (msg === 'cart' || msg === 'carrito') {
+          reply = [cartText(session.cart, lang), categoryItemsListMessage(cat, lang)];
+          break;
+        }
+
+        if (msg === 'done' || msg === 'listo' || msg === 'checkout') {
+          if (session.cart.length === 0) {
+            reply = [t.cartEmptyCheckout, categoryItemsListMessage(cat, lang)];
+          } else if (!isShopOpen()) {
+            const hours = lang === 'es' ? SHOP_INFO.hoursEs : SHOP_INFO.hoursEn;
+            reply = t.closedCheckout(hours, nextOpeningText(lang));
+          } else {
+            session.step = 'mode';
+            reply = [cartText(session.cart, lang), modeButtonsMessage(SHOP_INFO.deliveryFee, lang)];
+          }
           break;
         }
 
@@ -1217,11 +1705,11 @@ async function processWhatsAppMessage(message, res) {
           const item = cat && cat.items[itemIndex];
 
           if (!item) {
-            reply = t.itemNotFound + '\n\n' + categoryItemsText(cat, lang);
+            reply = [t.itemNotFound, categoryItemsListMessage(cat, lang)];
           } else if (isItemSoldOut(cat.id, itemIndex + 1)) {
-            reply = t.soldOutItem(item.name) + '\n\n' + categoryItemsText(cat, lang);
+            reply = [t.soldOutItem(item.name), categoryItemsListMessage(cat, lang)];
           } else if (qty < 1 || qty > MAX_QTY) {
-            reply = t.qtyRange(MAX_QTY) + '\n\n' + categoryItemsText(cat, lang);
+            reply = [t.qtyRange(MAX_QTY), categoryItemsListMessage(cat, lang)];
           } else {
             const name = item.sizes ? `${item.name} (${item.sizes[0].label})` : item.name;
             const price = item.sizes ? item.sizes[0].price : item.price;
@@ -1229,7 +1717,8 @@ async function processWhatsAppMessage(message, res) {
             session.step = 'menu';
             reply = [
               t.added(`${name} x${qty} - $${(price * qty).toFixed(2)}`, cartTotal(session.cart).toFixed(2)),
-              `${t.askConfirmNudge}\n\n${mainMenuText(lang)}`,
+              t.askConfirmNudge,
+              ...categoryListMessages(lang),
             ];
           }
           break;
@@ -1239,14 +1728,14 @@ async function processWhatsAppMessage(message, res) {
         const item = cat && cat.items[index];
 
         if (item && isItemSoldOut(cat.id, index + 1)) {
-          reply = t.soldOutItem(item.name) + '\n\n' + categoryItemsText(cat, lang);
+          reply = [t.soldOutItem(item.name), categoryItemsListMessage(cat, lang)];
         } else if (item) {
           session.pendingItem = item;
           session.pendingCategoryId = cat.id;
           session.pendingItemIndex = index + 1;
           if (item.sizes) {
             session.step = 'size';
-            reply = t.askSize(item.name, item.sizes);
+            reply = sizeButtonsMessage(item, lang);
           } else {
             session.step = 'quantity';
             reply = t.askQty(item.name, item.price.toFixed(2), MAX_QTY);
@@ -1255,9 +1744,9 @@ async function processWhatsAppMessage(message, res) {
           // Not a valid item number — maybe they typed a whole new order instead.
           const orderResult = await attemptFreeOrder(rawMsg, session);
           if (orderResult.added.length > 0 || orderResult.soldOut.length > 0) {
-            reply = `${orderResultText(orderResult, session, lang)}\n\n` + categoryItemsText(cat, lang);
+            reply = [orderResultText(orderResult, session, lang), categoryItemsListMessage(cat, lang)];
           } else {
-            reply = t.itemNotFound + '\n\n' + categoryItemsText(cat, lang);
+            reply = [t.itemNotFound, categoryItemsListMessage(cat, lang)];
           }
         }
         break;
@@ -1271,7 +1760,7 @@ async function processWhatsAppMessage(message, res) {
           session.pendingItem = null;
           session.pendingSize = null;
           session.step = 'item';
-          reply = categoryItemsText(cat, lang);
+          reply = categoryItemsListMessage(cat, lang);
           break;
         }
 
@@ -1281,9 +1770,9 @@ async function processWhatsAppMessage(message, res) {
           // then re-ask the size question so the original item isn't lost.
           const orderResult = await attemptFreeOrder(rawMsg, session);
           if (orderResult.added.length > 0 || orderResult.soldOut.length > 0) {
-            reply = `${orderResultText(orderResult, session, lang)}\n\n` + t.askSize(item.name, item.sizes);
+            reply = [orderResultText(orderResult, session, lang), sizeButtonsMessage(item, lang)];
           } else {
-            reply = t.invalidSize + '\n\n' + t.askSize(item.name, item.sizes);
+            reply = [t.invalidSize, sizeButtonsMessage(item, lang)];
           }
         } else {
           session.pendingSize = size;
@@ -1300,7 +1789,7 @@ async function processWhatsAppMessage(message, res) {
           session.pendingItem = null;
           session.pendingSize = null;
           session.step = 'item';
-          reply = categoryItemsText(cat, lang);
+          reply = categoryItemsListMessage(cat, lang);
           break;
         }
 
@@ -1333,30 +1822,51 @@ async function processWhatsAppMessage(message, res) {
         const name = size ? `${item.name} (${size.label})` : item.name;
         const price = size ? size.price : item.price;
 
+        if (msg === 'atras' || msg === 'back') {
+          // NOTE: '0' is deliberately excluded here — it already means "no
+          // note" for this step (see noNoteWords below), so treating it as
+          // "go back" too would silently break that existing shorthand.
+          session.step = 'quantity';
+          reply = t.askQty(name, price.toFixed(2), MAX_QTY);
+          break;
+        }
+
         const noNoteWords = ['none', 'no', 'ninguno', 'ninguna', 'nada', 'n/a', 'na', '0'];
         const note = noNoteWords.includes(msg) ? '' : rawMsg.trim().slice(0, 60);
 
         addToCart(session.cart, name, price, qty, note, session.pendingCategoryId, session.pendingItemIndex);
+        // Land back on this SAME category's item list (not the top-level
+        // category list) so picking several items from one category — e.g.
+        // three different drinks, each with its own note — doesn't require
+        // re-tapping the category button every single time.
+        const cat = MENU.find(c => c.id === session.pendingCategoryId);
+        session.currentCategory = session.pendingCategoryId;
         session.pendingItem = null;
         session.pendingSize = null;
         session.pendingQty = null;
         session.pendingCategoryId = null;
         session.pendingItemIndex = null;
-        session.step = 'menu';
+        session.step = 'item';
 
         const noteStr = note ? ` [${note}]` : '';
         reply = [
           t.added(`${name}${noteStr} x${qty} - $${(price * qty).toFixed(2)}`, cartTotal(session.cart).toFixed(2)),
-          `${t.askConfirmNudge}\n\n${mainMenuText(lang)}`,
+          t.askConfirmNudge,
+          categoryItemsListMessage(cat, lang),
         ];
         break;
       }
 
       case 'mode': {
+        if (msg === '0' || msg === 'atras' || msg === 'back') {
+          session.step = 'menu';
+          reply = [cartText(session.cart, lang), ...categoryListMessages(lang)];
+          break;
+        }
         if (msg.includes('pickup') || msg.includes('pick up') || msg.includes('recoger')) {
           session.mode = 'pickup';
           session.step = 'confirm';
-          reply = `${cartText(session.cart, lang)}\n\n${t.pickupConfirm}`;
+          reply = [cartText(session.cart, lang), confirmButtonsMessage(t.pickupConfirm, lang)];
         } else if (msg.includes('delivery') || msg.includes('entrega')) {
           session.mode = 'delivery';
           session.step = 'address';
@@ -1365,7 +1875,7 @@ async function processWhatsAppMessage(message, res) {
           // Didn't say pickup/delivery — maybe they're adding one more item first.
           const orderResult = await attemptFreeOrder(rawMsg, session);
           if (orderResult.added.length > 0 || orderResult.soldOut.length > 0) {
-            reply = `${orderResultText(orderResult, session, lang)}\n\n${cartText(session.cart, lang)}\n\n${t.askMode(SHOP_INFO.deliveryFee)}`;
+            reply = [orderResultText(orderResult, session, lang), cartText(session.cart, lang), modeButtonsMessage(SHOP_INFO.deliveryFee, lang)];
           } else {
             reply = t.askModeInvalid;
           }
@@ -1374,13 +1884,23 @@ async function processWhatsAppMessage(message, res) {
       }
 
       case 'address': {
+        if (msg === '0' || msg === 'atras' || msg === 'back') {
+          session.step = 'mode';
+          reply = modeButtonsMessage(SHOP_INFO.deliveryFee, lang);
+          break;
+        }
         session.address = rawMsg;
         session.step = 'confirm';
-        reply = `${cartText(session.cart, lang)}\n\n${t.deliveryConfirm(session.address)}`;
+        reply = [cartText(session.cart, lang), confirmButtonsMessage(t.deliveryConfirm(session.address), lang)];
         break;
       }
 
       case 'confirm': {
+        if (msg === '0' || msg === 'atras' || msg === 'back') {
+          session.step = session.mode === 'delivery' ? 'address' : 'mode';
+          reply = session.mode === 'delivery' ? t.askAddress(SHOP_INFO.deliveryFee) : modeButtonsMessage(SHOP_INFO.deliveryFee, lang);
+          break;
+        }
         if (msg === 'yes' || msg === 'si' || msg === 'sí' || msg === 'confirm' || msg === 'confirmo') {
           const orderNumber = Math.floor(1000 + Math.random() * 9000);
           reply = t.orderConfirmed(orderNumber, SHOP_INFO.phone);
@@ -1388,6 +1908,7 @@ async function processWhatsAppMessage(message, res) {
           console.log(`ORDER #${orderNumber} —`, JSON.stringify(session, null, 2));
 
           lastOrders[from] = {
+            orderNumber,
             cart: session.cart.map(item => ({ ...item })),
             mode: session.mode,
             address: session.address,
@@ -1426,7 +1947,7 @@ async function processWhatsAppMessage(message, res) {
             const reconfirm = session.mode === 'delivery'
               ? t.deliveryConfirm(session.address)
               : t.pickupConfirm;
-            reply = `${orderResultText(orderResult, session, lang)}\n\n${cartText(session.cart, lang)}\n\n${reconfirm}`;
+            reply = [orderResultText(orderResult, session, lang), cartText(session.cart, lang), confirmButtonsMessage(reconfirm, lang)];
           } else {
             reply = t.confirmInvalid;
           }
@@ -1436,7 +1957,7 @@ async function processWhatsAppMessage(message, res) {
 
       default: {
         session.step = 'menu';
-        reply = mainMenuText(lang);
+        reply = categoryListMessages(lang);
       }
     }
 
@@ -1477,8 +1998,9 @@ app.get('/', (req, res) => {
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
-  refreshAvailability(); // load once at startup so it's not empty for the first 2 min
-  setInterval(refreshAvailability, 2 * 60 * 1000);
+  refreshMenuFromSheet(); // load once at startup so it's not empty for the first 2 min
+  setInterval(refreshMenuFromSheet, 2 * 60 * 1000);
   pollOrderStatus(); // silent baseline pass — establishes "current" status without notifying
   setInterval(pollOrderStatus, 60 * 1000);
+  setInterval(sweepIdleSessions, 30 * 1000);
 });
