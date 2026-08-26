@@ -332,8 +332,10 @@ async function logOrderToSheets(orderNumber, session, from) {
       console.log(`Order #${orderNumber} logged to Sheets ✅ (Manager row ${managerNextRow}, Kitchen row ${kitchenNextRow})`);
     });
     // So the status poller doesn't treat this brand-new "Confirmed" row as a
-    // change to notify about the next time it runs.
-    lastKnownStatus.set(String(orderNumber), 'Confirmed');
+    // change to notify about the next time it runs. Key MUST match
+    // pollOrderStatus's `${orderNumber}|${timestamp}` scheme exactly — same
+    // `timestamp` string written into the row above.
+    lastKnownStatus.set(`${orderNumber}|${timestamp}`, 'Confirmed');
   } catch (err) {
     console.error('Google Sheets log error:', err);
   }
@@ -347,26 +349,33 @@ async function logOrderToSheets(orderNumber, session, from) {
 // true if a matching row was found and updated, false otherwise.
 async function cancelOrderInSheet(orderNumber, from) {
   if (!process.env.GOOGLE_SHEETS_ID) return false;
-  const res = await withTimeout(sheets.spreadsheets.values.get({
-    spreadsheetId: process.env.GOOGLE_SHEETS_ID,
-    range: 'Manager!A2:H',
-  }), 8000);
-  const rows = res.data.values || [];
-  for (let i = 0; i < rows.length; i++) {
-    const [rowOrderNumber, , , , , , phoneCell] = rows[i];
-    const phoneDigits = (phoneCell || '').replace(/\D/g, '');
-    if (String(rowOrderNumber) === String(orderNumber) && phoneDigits === String(from)) {
-      const rowNum = i + 2; // range above starts at row 2 (header is row 1)
-      await withTimeout(sheets.spreadsheets.values.update({
-        spreadsheetId: process.env.GOOGLE_SHEETS_ID,
-        range: `Manager!H${rowNum}`,
-        valueInputOption: 'USER_ENTERED',
-        requestBody: { values: [['Cancelled']] },
-      }), 6000);
-      return true;
+  // Shares logOrderToSheets' lock: this only updates a status cell on an
+  // already-located row rather than appending (so it doesn't have that
+  // function's "two writers compute the same next-empty-row" race), but
+  // serializing it against order writes anyway removes any doubt about
+  // overlapping requests hitting the same Manager sheet at once.
+  return withSessionLock('__sheets_manager_kitchen_write__', async () => {
+    const res = await withTimeout(sheets.spreadsheets.values.get({
+      spreadsheetId: process.env.GOOGLE_SHEETS_ID,
+      range: 'Manager!A2:H',
+    }), 8000);
+    const rows = res.data.values || [];
+    for (let i = 0; i < rows.length; i++) {
+      const [rowOrderNumber, , , , , , phoneCell] = rows[i];
+      const phoneDigits = (phoneCell || '').replace(/\D/g, '');
+      if (String(rowOrderNumber) === String(orderNumber) && phoneDigits === String(from)) {
+        const rowNum = i + 2; // range above starts at row 2 (header is row 1)
+        await withTimeout(sheets.spreadsheets.values.update({
+          spreadsheetId: process.env.GOOGLE_SHEETS_ID,
+          range: `Manager!H${rowNum}`,
+          valueInputOption: 'USER_ENTERED',
+          requestBody: { values: [['Cancelled']] },
+        }), 6000);
+        return true;
+      }
     }
-  }
-  return false;
+    return false;
+  });
 }
 
 // Owner-facing QUEUE command: how many orders are still open (i.e. not yet
@@ -413,7 +422,13 @@ async function getOrderStats() {
     confirmedCount++;
 
     (itemsWithPrice || '').split(';').forEach(segment => {
-      const match = segment.match(/^\s*(.+?)\s*x\d+/);
+      // Anchored through to the end of the segment (the trailing
+      // "x<qty> - $<total>" logOrderToSheets always writes) rather than
+      // stopping at the FIRST "x<digit>" — a customer's free-text note can
+      // itself contain something like "x2" (e.g. "[add x2 syrup]"), which a
+      // non-anchored match would misread as the real quantity marker and
+      // truncate the item name there instead of at the actual one.
+      const match = segment.match(/^\s*(.+?)\s*x\d+\s*-\s*\$[\d.]+\s*$/);
       if (!match) return;
       const name = match[1].replace(/\s*\[.*\]\s*$/, '').trim();
       if (name) itemCounts[name] = (itemCounts[name] || 0) + 1;
@@ -785,23 +800,33 @@ async function pollOrderStatus() {
     const rows = res.data.values || [];
 
     if (!statusPollingInitialized) {
-      rows.forEach((row, i) => {
-        const [orderNumber, , , , , , , status] = row;
-        if (orderNumber) lastKnownStatus.set(i, status || 'Confirmed');
+      rows.forEach(row => {
+        const [orderNumber, timestamp, , , , , , status] = row;
+        if (orderNumber) lastKnownStatus.set(`${orderNumber}|${timestamp}`, status || 'Confirmed');
       });
       statusPollingInitialized = true;
       return;
     }
 
-    for (const [i, row] of rows.entries()) {
-      const [orderNumber, , , , , language, phoneCell, statusCell] = row;
+    for (const row of rows) {
+      const [orderNumber, timestamp, , , , language, phoneCell, statusCell] = row;
       if (!orderNumber) continue;
       const status = (statusCell || 'Confirmed').trim();
-      // Keyed by row position, not order number — two rows sharing the same
-      // order number (a stale duplicate, or a random 4-digit collision) must
-      // never be compared against each other's status, or they flip-flop
-      // forever, re-notifying the customer every poll cycle indefinitely.
-      const key = i;
+      // Keyed by order number + timestamp together, not order number alone
+      // and not row position either. Order-number-alone was the original
+      // bug: two rows sharing the same order number (a stale duplicate, or
+      // a random 4-digit collision) got compared against each other's
+      // status and flip-flopped forever. Row-position was an earlier fix
+      // for that, but it's fragile to staff manually reordering/deleting
+      // rows in the sheet — every row below the edit point shifts to a
+      // DIFFERENT order's row index, so a live order's tracked status
+      // silently swaps to a stranger's. Timestamp doesn't change when rows
+      // are reordered, so this key is stable across edits AND still unique
+      // enough to keep genuine duplicate order numbers from colliding
+      // (they're vanishingly unlikely to share the exact same timestamp
+      // too). Must match the pre-seed logOrderToSheets writes right after
+      // creating a new order — see the comment there.
+      const key = `${orderNumber}|${timestamp}`;
       const previous = lastKnownStatus.get(key);
 
       if (previous === status) continue;
@@ -1429,6 +1454,11 @@ function truncateForRow(name) {
 function categoryListMessages(lang) {
   const toRows = cats => cats.map(cat => ({ id: cat.id, title: cat.category }));
   const buttonLabel = lang === 'es' ? 'Ver categoría' : 'View category';
+  // Both carry the SAME full text menu as fallback — sendReply's retry-on-
+  // failure logic is per-message, not "one fallback covers the whole
+  // batch," so if just the second (food) list send fails while the first
+  // succeeds, it still needs its own fallback or that customer silently
+  // never gets a food menu at all.
   return [
     {
       list: {
@@ -1436,7 +1466,7 @@ function categoryListMessages(lang) {
         buttonLabel,
         sections: [{ rows: toRows(MENU.filter(c => Number(c.id) <= 7)) }],
       },
-      fallback: mainMenuText(lang), // carries the FULL text menu (both drinks & food) so the second list below doesn't need its own fallback
+      fallback: mainMenuText(lang),
     },
     {
       list: {
@@ -1444,6 +1474,7 @@ function categoryListMessages(lang) {
         buttonLabel,
         sections: [{ rows: toRows(MENU.filter(c => Number(c.id) > 7)) }],
       },
+      fallback: mainMenuText(lang),
     },
   ];
 }
@@ -2125,7 +2156,11 @@ async function processWhatsAppMessage(message, res) {
     }
 
     if (msg === 'help' || msg === 'ayuda') {
-      return sendReply(res, from, welcomeText(lang));
+      // howToOrder no longer carries the menu inline (it used to) — pair it
+      // with the same menu-access button the language-selection reply
+      // already sends, so "help" doesn't leave a confused customer with
+      // instructions but no visible way to actually reach the menu.
+      return sendReply(res, from, [welcomeText(lang), menuButtonMessage(lang)]);
     }
 
     if (msg === 'agent' || msg === 'agente' || msg === 'human' || msg === 'humano') {
@@ -2146,9 +2181,16 @@ async function processWhatsAppMessage(message, res) {
         }), 8000);
         const rows = statusRes.data.values || [];
         let foundStatus = null;
+        // Match by BOTH order number AND phone — order numbers are random
+        // 4-digit values (~9000 possible), so matching by number alone risks
+        // showing this customer a DIFFERENT customer's status on a collision.
+        // Same rule cancelOrderInSheet already follows, for the same reason.
         for (const row of rows) {
-          const [orderNumber, , , , , , , statusCell] = row;
-          if (String(orderNumber) === String(last.orderNumber)) foundStatus = (statusCell || 'Confirmed').trim();
+          const [orderNumber, , , , , , phoneCell, statusCell] = row;
+          const phoneDigits = (phoneCell || '').replace(/\D/g, '');
+          if (String(orderNumber) === String(last.orderNumber) && phoneDigits === String(from)) {
+            foundStatus = (statusCell || 'Confirmed').trim();
+          }
         }
         return sendReply(res, from, t.statusReply(last.orderNumber, foundStatus || 'Confirmed'));
       } catch (err) {
@@ -2183,11 +2225,15 @@ async function processWhatsAppMessage(message, res) {
       }
     }
 
-    // Skipped while session.step === 'notes' — that step already treats ALL
-    // free text as the per-item note itself (e.g. "note: extra spicy"), so
-    // this global command would otherwise hijack it before it ever reaches
-    // the per-item handler and the pending item would never get added.
-    if (session.step !== 'notes' && /^(note|nota)\s+\S/i.test(rawMsg.trim())) {
+    // Skipped during 'notes' (per-item note, e.g. "note: extra spicy") and
+    // 'address' (a delivery address very plausibly starts with "note" as
+    // natural instructions, e.g. "note house behind the blue gate, ring
+    // bell twice") — both steps already treat ALL free text as that step's
+    // own answer, so this global command would otherwise silently swallow
+    // it: the customer sees a friendly "saved!" reply and thinks their
+    // answer went through, but session.step never advances and checkout
+    // gets stuck without them realizing why.
+    if (session.step !== 'notes' && session.step !== 'address' && /^(note|nota)\s+\S/i.test(rawMsg.trim())) {
       const noteText = rawMsg.trim().replace(/^(note|nota)\s+/i, '').slice(0, 200);
       try {
         await saveCustomerProfile(from, { notes: noteText });
