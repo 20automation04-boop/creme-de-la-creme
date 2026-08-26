@@ -161,7 +161,7 @@ const DRIVER_NUMBERS = [
   '5016162492',
 ];
 
-async function notifyDriver(orderNumber, session) {
+async function notifyDriver(orderNumber, session, from) {
   if (DRIVER_NUMBERS.length === 0) return;
 
   const itemLines = session.cart.map(i => {
@@ -173,9 +173,16 @@ async function notifyDriver(orderNumber, session) {
 
   const divider = '━━━━━━━━━━━━━━';
 
-  const message = session.language === 'es'
-    ? `🏍️ *NUEVA ORDEN DE ENTREGA #${orderNumber}*\n${divider}\n🛍️ *Artículos:*\n${itemLines}\n${divider}\n💵 *Total a cobrar: $${total} BZD*\n\n📍 *Entregar a:*\n${session.address}`
-    : `🏍️ *NEW DELIVERY ORDER #${orderNumber}*\n${divider}\n🛍️ *Items:*\n${itemLines}\n${divider}\n💵 *Total to collect: $${total} BZD*\n\n📍 *Deliver to:*\n${session.address}`;
+  const preorderTag = session.isPreorder ? (session.language === 'es' ? '🕐 *PRE-PEDIDO — armar cuando abramos*\n\n' : '🕐 *PRE-ORDER — prep when we open*\n\n') : '';
+
+  const profile = customerProfiles[from];
+  const noteTag = profile && profile.notes
+    ? (session.language === 'es' ? `\n\n⚠️ *Nota del cliente:* ${profile.notes}` : `\n\n⚠️ *Customer note:* ${profile.notes}`)
+    : '';
+
+  const message = preorderTag + (session.language === 'es'
+    ? `🏍️ *NUEVA ORDEN DE ENTREGA #${orderNumber}*\n${divider}\n🛍️ *Artículos:*\n${itemLines}\n${divider}\n💵 *Total a cobrar: $${total} BZD*\n\n📍 *Entregar a:*\n${session.address}${noteTag}`
+    : `🏍️ *NEW DELIVERY ORDER #${orderNumber}*\n${divider}\n🛍️ *Items:*\n${itemLines}\n${divider}\n💵 *Total to collect: $${total} BZD*\n\n📍 *Deliver to:*\n${session.address}${noteTag}`);
 
   for (const driverNumber of DRIVER_NUMBERS) {
     try {
@@ -231,7 +238,7 @@ async function logOrderToSheets(orderNumber, session, from) {
   }).join('; ');
 
   const total = session.cart.reduce((sum, i) => sum + i.price * i.qty, 0).toFixed(2);
-  const modeText = session.mode === 'delivery' ? `Delivery - ${session.address}` : 'Pickup';
+  const modeText = (session.mode === 'delivery' ? `Delivery - ${session.address}` : 'Pickup') + (session.isPreorder ? ' [PRE-ORDER]' : '');
   // `from` is bare digits (Meta/Chakra format, no '+'). Store it human-readable
   // with a '+' — the leading apostrophe forces Sheets to keep it as text
   // instead of trying to evaluate "+50161234567" as a formula.
@@ -276,6 +283,36 @@ async function logOrderToSheets(orderNumber, session, from) {
   } catch (err) {
     console.error('Google Sheets log error:', err);
   }
+}
+
+// Powers the post-confirmation cancel window (see the "cancel order"
+// command). Matches by BOTH order number AND phone — matching by order
+// number alone would risk touching the wrong row if a stale duplicate
+// order number exists (this exact class of bug already bit
+// pollOrderStatus once — see the row-position rewrite above). Returns
+// true if a matching row was found and updated, false otherwise.
+async function cancelOrderInSheet(orderNumber, from) {
+  if (!process.env.GOOGLE_SHEETS_ID) return false;
+  const res = await withTimeout(sheets.spreadsheets.values.get({
+    spreadsheetId: process.env.GOOGLE_SHEETS_ID,
+    range: 'Manager!A2:H',
+  }), 8000);
+  const rows = res.data.values || [];
+  for (let i = 0; i < rows.length; i++) {
+    const [rowOrderNumber, , , , , , phoneCell] = rows[i];
+    const phoneDigits = (phoneCell || '').replace(/\D/g, '');
+    if (String(rowOrderNumber) === String(orderNumber) && phoneDigits === String(from)) {
+      const rowNum = i + 2; // range above starts at row 2 (header is row 1)
+      await withTimeout(sheets.spreadsheets.values.update({
+        spreadsheetId: process.env.GOOGLE_SHEETS_ID,
+        range: `Manager!H${rowNum}`,
+        valueInputOption: 'USER_ENTERED',
+        requestBody: { values: [['Cancelled']] },
+      }), 6000);
+      return true;
+    }
+  }
+  return false;
 }
 
 const app = express();
@@ -421,6 +458,17 @@ function isItemSoldOut(categoryId, itemIndex) {
   return soldOutIds.has(itemKey(categoryId, itemIndex));
 }
 
+// Best-effort substitute for a sold-out item — the first OTHER non-sold-out
+// item in the SAME category, so the customer gets a concrete alternative
+// instead of the item just disappearing. Returns null if categoryId is
+// unrecognized or everything else in that category is also sold out.
+function suggestSubstitute(categoryId, itemIndex) {
+  const cat = MENU.find(c => c.id === categoryId);
+  if (!cat) return null;
+  const alt = cat.items.find((item, i) => i + 1 !== itemIndex && !isItemSoldOut(categoryId, i + 1));
+  return alt ? alt.name : null;
+}
+
 // categoryId.itemIndex -> item object reference, built once from the static
 // menu-data.js structure. Only existing items can be price-overridden this
 // way — adding brand-new items isn't sheet-driven (see refreshMenuFromSheet).
@@ -480,6 +528,61 @@ async function refreshMenuFromSheet() {
   } catch (err) {
     console.error('Menu sheet refresh failed (keeping previous prices/availability):', err.message || err);
   }
+}
+
+// ---- CUSTOMER PROFILES (saved address, allergy/preference notes) ----
+// Backed by a "Customers" tab (Phone, SavedAddress, Notes, UpdatedAt) so
+// this survives restarts/redeploys — unlike `sessions`, which is meant to
+// reset. Run `node seed-customers.js` once to create the tab if it doesn't
+// exist yet; reads/writes here fail open (log and continue) if it's missing
+// so a customer's order is never blocked on this being set up.
+let customerProfiles = {};
+
+async function refreshCustomerProfiles() {
+  if (!process.env.GOOGLE_SHEETS_ID) return;
+  try {
+    const res = await withTimeout(sheets.spreadsheets.values.get({
+      spreadsheetId: process.env.GOOGLE_SHEETS_ID,
+      range: 'Customers!A2:D',
+    }), 8000);
+    const rows = res.data.values || [];
+    const next = {};
+    for (const row of rows) {
+      const [phoneCell, savedAddress, notes, updatedAt] = row;
+      const phone = (phoneCell || '').replace(/\D/g, '');
+      if (!phone) continue;
+      next[phone] = { savedAddress: savedAddress || '', notes: notes || '', updatedAt: updatedAt || '' };
+    }
+    customerProfiles = next;
+  } catch (err) {
+    // Fail open — most likely the Customers tab hasn't been created yet
+    // (run seed-customers.js), or a transient Sheets error either way.
+    console.error('Customer profile refresh failed (keeping previous profiles):', err.message || err);
+  }
+}
+
+// Optimistic: updates the in-memory cache immediately (so the very next
+// message in this same conversation sees it), then writes through to the
+// sheet in the background. `fields` is a partial { savedAddress, notes }.
+async function saveCustomerProfile(from, fields) {
+  const merged = { ...(customerProfiles[from] || {}), ...fields, updatedAt: new Date().toISOString() };
+  customerProfiles[from] = merged;
+
+  if (!process.env.GOOGLE_SHEETS_ID) return;
+  const res = await withTimeout(sheets.spreadsheets.values.get({
+    spreadsheetId: process.env.GOOGLE_SHEETS_ID,
+    range: 'Customers!A2:D',
+  }), 8000);
+  const rows = res.data.values || [];
+  const rowIndex = rows.findIndex(r => (r[0] || '').replace(/\D/g, '') === String(from));
+  const rowValues = [`'+${from}`, merged.savedAddress || '', merged.notes || '', merged.updatedAt];
+  const rowNum = rowIndex >= 0 ? rowIndex + 2 : rows.length + 2; // +2: range starts at row 2 (header is row 1)
+  await withTimeout(sheets.spreadsheets.values.update({
+    spreadsheetId: process.env.GOOGLE_SHEETS_ID,
+    range: `Customers!A${rowNum}:D${rowNum}`,
+    valueInputOption: 'USER_ENTERED',
+    requestBody: { values: [rowValues] },
+  }), 6000);
 }
 
 // ---- ORDER STATUS POLLING (proactive WhatsApp updates) ----
@@ -638,7 +741,7 @@ function nextOpeningText(lang) {
 // ---- LANGUAGE TEXT ----
 const TXT = {
   en: {
-    howToOrder: `🍧 *Créme De La Créme* 🍧
+    howToOrder: () => `🍧 *Créme De La Créme* 🍧
 
 *How to order:*
 1️⃣ Reply with a category number to browse
@@ -646,11 +749,15 @@ const TXT = {
 3️⃣ Ask us anything — hours, delivery, payment methods
 4️⃣ You can add more items any time, even mid-order — nothing locks in until you confirm ✅
 
+🏍️ Delivery available in ${SHOP_INFO.deliveryAreasEn} (${SHOP_INFO.deliveryTimeEn}) — or pick up in-store 📦
+
 *cart* = view your order
 *repeat* = reorder your last order
 *done* = checkout
 *back* = go back a step
 *cancel* = cancel your order
+*cancel order* = cancel a just-placed order (within 3 min)
+*note <text>* = save an allergy/preference note for next time
 *status* = check your last order's status
 *agent* = talk to a real person
 *help* = show these instructions again
@@ -678,14 +785,14 @@ const TXT = {
     deliveryConfirm: (addr) => `🏍️ Delivery to: ${addr}\n\nConfirm order? (yes/no)`,
     askModeInvalid: "Please reply 'pickup' or 'delivery'.",
     orderConfirmed: (num, phone) => `🎉 Order #${num} confirmed! Thank you!\n\nWe'll be in touch shortly.\n\n📞 Need anything else? Call us at ${phone}.`,
+    orderConfirmedPreorder: (num, phone, nextOpen) => `🎉 Pre-order #${num} received! Thank you!\n\nWe're closed right now, but we'll start on it right when we open ${nextOpen}.\n\n📞 Need anything else? Call us at ${phone}.`,
     orderCancelled: 'Order cancelled.',
     confirmInvalid: "Please reply 'yes' to confirm or 'no' to cancel.",
     notUnderstood: "Sorry, I didn't quite catch that — try a menu number, or type *help* for instructions.",
     humanHelp: (phone) => `📞 Need to talk to someone? Call us at ${phone}.`,
     askConfirmNudge: "🧾 Want to add anything else? Just tell me — or type *done* whenever you're ready to checkout!",
-    closedBanner: (hours, nextOpen) => `😴 *We're closed right now.*\nHours: ${hours}\nWe'll be back open ${nextOpen}.\n\nYou can browse the menu, but we can't confirm orders until we reopen.\n\n`,
-    closedCheckout: (hours, nextOpen) => `😴 We're closed right now, so we can't take your order just yet.\nHours: ${hours}\nWe'll reopen ${nextOpen} — your cart is saved, just type *done* again once we're open!`,
-    soldOutItem: (name) => `😔 Sorry, ${name} is sold out right now.`,
+    closedBanner: (hours, nextOpen) => `😴 *We're closed right now.*\nHours: ${hours}\nWe'll be back open ${nextOpen}.\n\n✅ You can still place a pre-order — we'll get started on it right when we open!\n\n`,
+    soldOutItem: (name, substitute) => `😔 Sorry, ${name} is sold out right now.${substitute ? ` How about ${substitute} instead? 😋` : ''}`,
     noPreviousOrder: "You don't have a previous order to repeat yet — let's start one! 😊",
     idleStillThere: "👋 Still with me? Your cart's saved whenever you're ready to continue.",
     idleConfirmPrompt: "🧾 Ready to place this order? Reply *YES* to confirm.",
@@ -699,9 +806,17 @@ const TXT = {
     stopGuessing: "🤔 Let's try this a different way — tap an option below, or type *agent* to talk to a real person.",
     frustrationSoften: "😊 Sorry for the back-and-forth — let's get this sorted out for you.",
     frustrationShortcut: "Want me to just have our team give you a call instead? Type *agent* anytime.",
+    cancelWindowClosed: (phone) => `Sorry, that 3-minute window to cancel your order has closed — please call us at ${phone} if you need changes.`,
+    orderCancelledConfirmed: (num) => `❌ Order #${num} has been cancelled. Type *menu* if you'd like to place a new one.`,
+    cancelOrderNotFound: (phone) => `Sorry, I couldn't find that order to cancel — please call us at ${phone}.`,
+    savedAddressOffer: (addr) => `📍 Use your saved address?\n${addr}`,
+    savedAddressUseIt: 'Use saved address',
+    savedAddressNew: 'Enter new address',
+    noteSaved: "Got it — I've saved that note for next time. 📝",
+    reorderUsualPrompt: 'Reorder your usual? 🔁',
   },
   es: {
-    howToOrder: `🍧 *Créme De La Créme* 🍧
+    howToOrder: () => `🍧 *Créme De La Créme* 🍧
 
 *Cómo ordenar:*
 1️⃣ Responde con el número de una categoría para explorar
@@ -709,11 +824,15 @@ const TXT = {
 3️⃣ Pregúntanos lo que sea — horario, entregas, formas de pago
 4️⃣ Puedes añadir más artículos en cualquier momento, incluso a mitad de la orden — nada queda fijo hasta que confirmes ✅
 
+🏍️ Entrega disponible en ${SHOP_INFO.deliveryAreasEs} (${SHOP_INFO.deliveryTimeEs}) — o recoge en tienda 📦
+
 *cart* = ver tu orden
 *repeat* = repetir tu última orden
 *done* = finalizar
 *back* = volver un paso
 *cancel* = cancelar tu orden
+*cancelar orden* = cancelar una orden recién hecha (hasta 3 min)
+*nota <texto>* = guardar una nota de alergia/preferencia para la próxima vez
 *status* = ver el estado de tu última orden
 *agent* = hablar con una persona real
 *help* = ver estas instrucciones otra vez
@@ -741,14 +860,14 @@ const TXT = {
     deliveryConfirm: (addr) => `🏍️ Entrega a: ${addr}\n\n¿Confirmas la orden? (si/no)`,
     askModeInvalid: "Responde 'recoger' o 'entrega'.",
     orderConfirmed: (num, phone) => `🎉 ¡Orden #${num} confirmada! ¡Gracias!\n\nNos pondremos en contacto pronto.\n\n📞 ¿Necesitas algo más? Llámanos al ${phone}.`,
+    orderConfirmedPreorder: (num, phone, nextOpen) => `🎉 ¡Pre-pedido #${num} recibido! ¡Gracias!\n\nEstamos cerrados ahora, pero empezaremos apenas abramos ${nextOpen}.\n\n📞 ¿Necesitas algo más? Llámanos al ${phone}.`,
     orderCancelled: 'Orden cancelada.',
     confirmInvalid: "Responde 'si' o 'no'.",
     notUnderstood: 'No entendí eso — intenta un número del menú, o escribe *help* para instrucciones.',
     humanHelp: (phone) => `📞 ¿Necesitas hablar con alguien? Llámanos al ${phone}.`,
     askConfirmNudge: "🧾 ¿Quieres añadir algo más? Solo dime — o escribe *done* cuando estés listo para finalizar!",
-    closedBanner: (hours, nextOpen) => `😴 *Estamos cerrados en este momento.*\nHorario: ${hours}\nAbrimos de nuevo ${nextOpen}.\n\nPuedes ver el menú, pero no podemos confirmar pedidos hasta que abramos.\n\n`,
-    closedCheckout: (hours, nextOpen) => `😴 Estamos cerrados en este momento, así que no podemos tomar tu orden todavía.\nHorario: ${hours}\nAbrimos de nuevo ${nextOpen} — tu carrito está guardado, solo escribe *done* otra vez cuando abramos!`,
-    soldOutItem: (name) => `😔 Lo sentimos, ${name} está agotado en este momento.`,
+    closedBanner: (hours, nextOpen) => `😴 *Estamos cerrados en este momento.*\nHorario: ${hours}\nAbrimos de nuevo ${nextOpen}.\n\n✅ Aún puedes hacer un pre-pedido — ¡empezaremos apenas abramos!\n\n`,
+    soldOutItem: (name, substitute) => `😔 Lo sentimos, ${name} está agotado en este momento.${substitute ? ` ¿Qué tal ${substitute} en su lugar? 😋` : ''}`,
     noPreviousOrder: 'Aún no tienes una orden anterior para repetir — ¡empecemos una! 😊',
     idleStillThere: '👋 ¿Sigues ahí? Tu carrito está guardado para cuando quieras continuar.',
     idleConfirmPrompt: '🧾 ¿Listo para confirmar esta orden? Responde *SI* para confirmar.',
@@ -762,6 +881,14 @@ const TXT = {
     stopGuessing: '🤔 Intentemos de otra forma — toca una opción abajo, o escribe *agent* para hablar con una persona real.',
     frustrationSoften: '😊 Disculpa el ir y venir — vamos a resolver esto.',
     frustrationShortcut: '¿Quieres que nuestro equipo te llame en vez de esto? Escribe *agent* cuando quieras.',
+    cancelWindowClosed: (phone) => `Lo sentimos, la ventana de 3 minutos para cancelar tu orden ya cerró — llámanos al ${phone} si necesitas hacer cambios.`,
+    orderCancelledConfirmed: (num) => `❌ La orden #${num} fue cancelada. Escribe *menu* si quieres hacer una nueva.`,
+    cancelOrderNotFound: (phone) => `Lo sentimos, no pudimos encontrar esa orden para cancelar — por favor llámanos al ${phone}.`,
+    savedAddressOffer: (addr) => `📍 ¿Usar tu dirección guardada?\n${addr}`,
+    savedAddressUseIt: 'Usar dirección guardada',
+    savedAddressNew: 'Escribir nueva dirección',
+    noteSaved: 'Listo — guardé esa nota para la próxima vez. 📝',
+    reorderUsualPrompt: '¿Repetir lo de siempre? 🔁',
   },
 };
 
@@ -819,6 +946,7 @@ const IDLE_NUDGE_MS = 3 * 60 * 1000;   // ~3 min: "still with me?" / confirm-pro
 const IDLE_HOLD_MS = 10 * 60 * 1000;   // ~10 min: "holding your order..."
 const IDLE_EXPIRE_MS = 30 * 60 * 1000; // ~30 min: save cart + offer resume next time
 const SAVED_CART_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000; // prune very old unclaimed saved carts
+const ORDER_CANCEL_WINDOW_MS = 3 * 60 * 1000; // post-confirmation edit/cancel window — see the "cancel order" command
 
 function sweepIdleSessions() {
   const now = Date.now();
@@ -944,7 +1072,9 @@ function transcriptText(session) {
 // context so the customer never has to repeat themselves either way.
 function escalateToHuman(from, session, lang, reasonLine) {
   const cartSummary = session.cart.length > 0 ? `\n\nCart:\n${cartText(session.cart, lang)}` : '';
-  const staffMsg = `🔔 ${reasonLine}\nCustomer: +${from} (step: ${session.step})${cartSummary}\n\n📝 Recent conversation:\n${transcriptText(session)}`;
+  const profile = customerProfiles[from];
+  const noteTag = profile && profile.notes ? `\n⚠️ Customer note: ${profile.notes}` : '';
+  const staffMsg = `🔔 ${reasonLine}\nCustomer: +${from} (step: ${session.step})${noteTag}${cartSummary}\n\n📝 Recent conversation:\n${transcriptText(session)}`;
   if (process.env.DEBUG_REPLIES) console.log('ESCALATE >>>', staffMsg);
   DRIVER_NUMBERS.forEach(num => {
     sendWhatsAppMessage(num, staffMsg).catch(err => console.error(`Escalation notify failed for ${num}:`, err.message || err));
@@ -991,7 +1121,7 @@ function menuListText() {
 }
 
 function welcomeText(lang) {
-  return TXT[lang].howToOrder;
+  return TXT[lang].howToOrder();
 }
 
 // Sent before the customer has picked a language, so the body/fallback text
@@ -1168,11 +1298,56 @@ function confirmButtonsMessage(bodyText, lang) {
   };
 }
 
+function savedAddressButtonsMessage(addr, lang) {
+  const t = TXT[lang];
+  const body = t.savedAddressOffer(addr);
+  return {
+    buttons: {
+      body,
+      buttons: [
+        { id: 'use_saved_address', title: t.savedAddressUseIt },
+        { id: 'new_address', title: t.savedAddressNew },
+      ],
+    },
+    fallback: body,
+  };
+}
+
+// Tapping this sends id 'repeat', which the 'menu' step's existing repeat/
+// repetir handler already treats identically to typing it — no other wiring
+// needed. Only shown when there's an empty-cart fresh start AND real order
+// history, so it's a genuine shortcut rather than clutter mid-order.
+function reorderUsualButtonMessage(lang) {
+  const t = TXT[lang];
+  return {
+    buttons: {
+      body: t.reorderUsualPrompt,
+      buttons: [{ id: 'repeat', title: lang === 'es' ? 'Repetir 🔁' : 'Reorder 🔁' }],
+    },
+    fallback: t.reorderUsualPrompt,
+  };
+}
+
 function withTimeout(promise, ms) {
   return Promise.race([
     promise,
     new Promise((_, reject) => setTimeout(() => reject(new Error('AI call timed out')), ms)),
   ]);
+}
+
+// ---- LANGUAGE DETECTION (first message only, before a language is picked) ----
+// Deliberately conservative — same "false positives are worse than misses"
+// principle as the frustration scoring: only fires on a strong, unambiguous
+// signal, never on a short or ambiguous first message.
+const SPANISH_SIGNAL_REGEX = /[¿¡]|\b(hola|quiero|quisiera|buenas|gracias|por favor|men[uú]|tienen|hacen entrega|env[ií]an|cu[aá]nto|d[oó]nde|cu[aá]ndo|quisieramos|pedido)\b/i;
+const ENGLISH_SIGNAL_REGEX = /\b(hello|hi there|i want|i'd like|i would like|do you have|menu please|thanks|good morning|good afternoon)\b/i;
+
+function detectLanguage(rawMsg) {
+  const msg = rawMsg.trim();
+  if (msg.length < 4) return null; // too short to be confident either way
+  if (SPANISH_SIGNAL_REGEX.test(msg)) return 'es';
+  if (ENGLISH_SIGNAL_REGEX.test(msg.toLowerCase())) return 'en';
+  return null;
 }
 
 // ---- FAQ (deterministic, zero AI cost, checked before AI) ----
@@ -1369,7 +1544,7 @@ function applyMatchesToCart(session, matches) {
     if (!item) continue;
 
     if (isItemSoldOut(cat.id, m.itemIndex)) {
-      soldOutNames.push(item.name);
+      soldOutNames.push({ name: item.name, categoryId: cat.id, itemIndex: m.itemIndex });
       continue;
     }
 
@@ -1397,8 +1572,11 @@ function applyMatchesToCart(session, matches) {
 // ---- ORDER-ANYTIME HELPER ----
 // Tries to interpret a message as a food order (direct match first, then AI fallback)
 // and adds any in-stock matches straight to the cart. Returns
-// { added: [...], soldOut: [...] } — either array may be empty — or null if
-// nothing in the message looked like an order at all. Used both in the main
+// { added: [...], soldOut: [{name, categoryId, itemIndex}, ...] } — either
+// array may be empty — soldOut carries categoryId/itemIndex (not just the
+// name) so a substitute from the same category can be suggested instead of
+// just dropping the item silently — or null if nothing in the message
+// looked like an order at all. Used both in the main
 // menu step AND as a fallback inside every other step, so a customer can slip
 // in "also add a hot dog" while answering a size/quantity/mode/confirm question
 // without losing their place in that flow.
@@ -1460,7 +1638,7 @@ function orderResultText(result, session, lang) {
   const t = TXT[lang];
   const bits = [];
   if (result.soldOut.length > 0) {
-    bits.push(result.soldOut.map(name => t.soldOutItem(name)).join('\n'));
+    bits.push(result.soldOut.map(s => t.soldOutItem(s.name, suggestSubstitute(s.categoryId, s.itemIndex))).join('\n'));
   }
   if (result.added.length > 0) {
     bits.push(t.added(result.added.join('\n'), cartTotal(session.cart).toFixed(2)));
@@ -1602,6 +1780,15 @@ async function processWhatsAppMessage(message, res) {
         session.step = 'menu';
         return sendReply(res, from, [withClosedBanner(welcomeText('es'), 'es'), menuButtonMessage('es')]);
       }
+      // Only auto-picks on a strong, unambiguous signal — a bare "hi" or a
+      // stray number stays with the explicit picker rather than risk
+      // guessing wrong. *language* remains available anytime to switch.
+      const detected = detectLanguage(rawMsg);
+      if (detected) {
+        session.language = detected;
+        session.step = 'menu';
+        return sendReply(res, from, [withClosedBanner(welcomeText(detected), detected), menuButtonMessage(detected)]);
+      }
       return sendReply(res, from, languageButtonsMessage());
     }
     const lang = session.language;
@@ -1621,7 +1808,7 @@ async function processWhatsAppMessage(message, res) {
         const restoredCart = [];
         saved.cart.forEach(item => {
           if (item.categoryId != null && item.itemIndex != null && isItemSoldOut(item.categoryId, item.itemIndex)) {
-            soldOutLines.push(t.soldOutItem(item.name));
+            soldOutLines.push(t.soldOutItem(item.name, suggestSubstitute(item.categoryId, item.itemIndex)));
           } else {
             restoredCart.push(item);
           }
@@ -1684,9 +1871,53 @@ async function processWhatsAppMessage(message, res) {
       }
     }
 
+    if (msg === 'cancel order' || msg === 'cancel my order' || msg === 'cancelar orden' || msg === 'cancelar mi orden' || msg === 'cancelar pedido') {
+      const last = lastOrders[from];
+      const withinWindow = last && last.confirmedAt && (Date.now() - last.confirmedAt) < ORDER_CANCEL_WINDOW_MS;
+      if (!withinWindow) {
+        return sendReply(res, from, t.cancelWindowClosed(SHOP_INFO.phone));
+      }
+      try {
+        const found = await cancelOrderInSheet(last.orderNumber, from);
+        if (!found) {
+          return sendReply(res, from, t.cancelOrderNotFound(SHOP_INFO.phone));
+        }
+        if (last.mode === 'delivery') {
+          const cancelMsg = `❌ Order #${last.orderNumber} was cancelled by the customer (within the 3-minute window).`;
+          DRIVER_NUMBERS.forEach(num => {
+            sendWhatsAppMessage(num, cancelMsg).catch(err => console.error(`Cancel-order driver notify failed for ${num}:`, err.message || err));
+          });
+        }
+        const cancelledOrderNumber = last.orderNumber;
+        delete lastOrders[from]; // one cancel per confirmed order — prevents a second cancel attempt on an already-cancelled order
+        return sendReply(res, from, t.orderCancelledConfirmed(cancelledOrderNumber));
+      } catch (err) {
+        console.error('Order cancel failed:', err.message || err);
+        return sendReply(res, from, t.cancelOrderNotFound(SHOP_INFO.phone));
+      }
+    }
+
+    // Skipped while session.step === 'notes' — that step already treats ALL
+    // free text as the per-item note itself (e.g. "note: extra spicy"), so
+    // this global command would otherwise hijack it before it ever reaches
+    // the per-item handler and the pending item would never get added.
+    if (session.step !== 'notes' && /^(note|nota)\s+\S/i.test(rawMsg.trim())) {
+      const noteText = rawMsg.trim().replace(/^(note|nota)\s+/i, '').slice(0, 200);
+      try {
+        await saveCustomerProfile(from, { notes: noteText });
+      } catch (err) {
+        console.error(`Failed to save note for ${from}:`, err.message || err);
+      }
+      return sendReply(res, from, t.noteSaved);
+    }
+
     if (msg === 'hola' || msg === 'hi' || msg === 'hello' || msg === 'menu' || msg === 'start') {
       session.step = 'menu';
-      return sendReply(res, from, [withClosedBanner('', lang), ...categoryListMessages(lang)]);
+      const messages = [withClosedBanner('', lang), ...categoryListMessages(lang)];
+      if (session.cart.length === 0 && lastOrders[from] && lastOrders[from].cart && lastOrders[from].cart.length > 0) {
+        messages.push(reorderUsualButtonMessage(lang));
+      }
+      return sendReply(res, from, messages);
     }
 
     let reply = '';
@@ -1710,7 +1941,7 @@ async function processWhatsAppMessage(message, res) {
             const soldOutLines = [];
             last.cart.forEach(item => {
               if (item.categoryId != null && item.itemIndex != null && isItemSoldOut(item.categoryId, item.itemIndex)) {
-                soldOutLines.push(t.soldOutItem(item.name));
+                soldOutLines.push(t.soldOutItem(item.name, suggestSubstitute(item.categoryId, item.itemIndex)));
                 return;
               }
               addToCart(session.cart, item.name, item.price, item.qty, item.note, item.categoryId, item.itemIndex);
@@ -1731,12 +1962,9 @@ async function processWhatsAppMessage(message, res) {
         } else if (msg === 'done' || msg === 'listo' || msg === 'checkout') {
           if (session.cart.length === 0) {
             reply = [t.cartEmptyCheckout, ...categoryListMessages(lang)];
-          } else if (!isShopOpen()) {
-            // Cart stays intact and session.step stays 'menu' — they can keep
-            // adding items or just come back and type "done" once open.
-            const hours = lang === 'es' ? SHOP_INFO.hoursEs : SHOP_INFO.hoursEn;
-            reply = t.closedCheckout(hours, nextOpeningText(lang));
           } else {
+            // Checkout proceeds even while closed — confirming becomes a
+            // pre-order instead of a dead end (see the 'confirm' step below).
             session.step = 'mode';
             reply = [cartText(session.cart, lang), modeButtonsMessage(SHOP_INFO.deliveryFee, lang)];
           }
@@ -1790,9 +2018,6 @@ async function processWhatsAppMessage(message, res) {
         if (msg === 'done' || msg === 'listo' || msg === 'checkout') {
           if (session.cart.length === 0) {
             reply = [t.cartEmptyCheckout, categoryItemsListMessage(cat, lang)];
-          } else if (!isShopOpen()) {
-            const hours = lang === 'es' ? SHOP_INFO.hoursEs : SHOP_INFO.hoursEn;
-            reply = t.closedCheckout(hours, nextOpeningText(lang));
           } else {
             session.step = 'mode';
             reply = [cartText(session.cart, lang), modeButtonsMessage(SHOP_INFO.deliveryFee, lang)];
@@ -1810,7 +2035,7 @@ async function processWhatsAppMessage(message, res) {
             parseFailed = true;
             reply = [t.itemNotFound, categoryItemsListMessage(cat, lang)];
           } else if (isItemSoldOut(cat.id, itemIndex + 1)) {
-            reply = [t.soldOutItem(item.name), categoryItemsListMessage(cat, lang)];
+            reply = [t.soldOutItem(item.name, suggestSubstitute(cat.id, itemIndex + 1)), categoryItemsListMessage(cat, lang)];
           } else if (qty < 1 || qty > MAX_QTY) {
             reply = [t.qtyRange(MAX_QTY), categoryItemsListMessage(cat, lang)];
           } else {
@@ -1831,7 +2056,7 @@ async function processWhatsAppMessage(message, res) {
         const item = cat && cat.items[index];
 
         if (item && isItemSoldOut(cat.id, index + 1)) {
-          reply = [t.soldOutItem(item.name), categoryItemsListMessage(cat, lang)];
+          reply = [t.soldOutItem(item.name, suggestSubstitute(cat.id, index + 1)), categoryItemsListMessage(cat, lang)];
         } else if (item) {
           session.pendingItem = item;
           session.pendingCategoryId = cat.id;
@@ -1976,7 +2201,8 @@ async function processWhatsAppMessage(message, res) {
         } else if (msg.includes('delivery') || msg.includes('entrega')) {
           session.mode = 'delivery';
           session.step = 'address';
-          reply = t.askAddress(SHOP_INFO.deliveryFee);
+          const savedAddr = customerProfiles[from] && customerProfiles[from].savedAddress;
+          reply = savedAddr ? savedAddressButtonsMessage(savedAddr, lang) : t.askAddress(SHOP_INFO.deliveryFee);
         } else {
           // Didn't say pickup/delivery — maybe they're adding one more item first.
           const orderResult = await attemptFreeOrder(rawMsg, session);
@@ -1996,8 +2222,23 @@ async function processWhatsAppMessage(message, res) {
           reply = modeButtonsMessage(SHOP_INFO.deliveryFee, lang);
           break;
         }
+        const savedAddr = customerProfiles[from] && customerProfiles[from].savedAddress;
+        if (msg === 'use_saved_address' && savedAddr) {
+          session.address = savedAddr;
+          session.step = 'confirm';
+          reply = [cartText(session.cart, lang), confirmButtonsMessage(t.deliveryConfirm(session.address), lang)];
+          break;
+        }
+        if (msg === 'new_address') {
+          reply = t.askAddress(SHOP_INFO.deliveryFee); // stay in 'address', re-ask plainly
+          break;
+        }
         session.address = rawMsg;
         session.step = 'confirm';
+        // Fire-and-forget write-through — saved for next time regardless of
+        // whether THIS order goes on to be confirmed or cancelled; it's a
+        // convenience cache, not tied to any one order's outcome.
+        saveCustomerProfile(from, { savedAddress: rawMsg }).catch(err => console.error(`Failed to save address for ${from}:`, err.message || err));
         reply = [cartText(session.cart, lang), confirmButtonsMessage(t.deliveryConfirm(session.address), lang)];
         break;
       }
@@ -2010,7 +2251,11 @@ async function processWhatsAppMessage(message, res) {
         }
         if (msg === 'yes' || msg === 'si' || msg === 'sí' || msg === 'confirm' || msg === 'confirmo') {
           const orderNumber = Math.floor(1000 + Math.random() * 9000);
-          reply = t.orderConfirmed(orderNumber, SHOP_INFO.phone);
+          const isPreorder = !isShopOpen();
+          session.isPreorder = isPreorder; // read by logOrderToSheets/notifyDriver below to tag the order
+          reply = isPreorder
+            ? t.orderConfirmedPreorder(orderNumber, SHOP_INFO.phone, nextOpeningText(lang))
+            : t.orderConfirmed(orderNumber, SHOP_INFO.phone);
 
           console.log(`ORDER #${orderNumber} —`, JSON.stringify(session, null, 2));
 
@@ -2019,6 +2264,7 @@ async function processWhatsAppMessage(message, res) {
             cart: session.cart.map(item => ({ ...item })),
             mode: session.mode,
             address: session.address,
+            confirmedAt: Date.now(), // powers the 3-minute post-confirmation cancel window — see the "cancel order" command
           };
 
           // Fire-and-forget: Sheets logging and driver notification both run
@@ -2029,7 +2275,7 @@ async function processWhatsAppMessage(message, res) {
             console.error('Background Sheets log failed:', err);
           });
           if (session.mode === 'delivery') {
-            notifyDriver(orderNumber, session).catch(err => {
+            notifyDriver(orderNumber, session, from).catch(err => {
               console.error('Background driver notification failed:', err);
             });
           }
@@ -2164,4 +2410,6 @@ app.listen(PORT, () => {
   pollOrderStatus(); // silent baseline pass — establishes "current" status without notifying
   setInterval(pollOrderStatus, 60 * 1000);
   setInterval(sweepIdleSessions, 30 * 1000);
+  refreshCustomerProfiles(); // load once at startup; changes rarely so a slower refresh than availability is fine
+  setInterval(refreshCustomerProfiles, 5 * 60 * 1000);
 });
