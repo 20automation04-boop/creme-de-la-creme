@@ -30,6 +30,22 @@ function chakraSendUrl() {
 // { text, mediaUrl } to send an image (with optional caption),
 // { buttons: { body, buttons: [{id,title}] } } for up to 3 reply buttons, or
 // { list: { body, buttonLabel, sections } } for a native list message.
+// Raw POST to Chakra's messages endpoint — the low-level piece shared by
+// sendWhatsAppMessage (actual replies) and markAsRead (read receipt/typing
+// indicator) below. Callers keep their own credential checks and response
+// handling (one throws on failure, the other just warns) since those
+// differ enough not to be worth forcing into one shared shape.
+function postToChakra(body, timeoutMs) {
+  return withTimeout(fetch(chakraSendUrl(), {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${CHAKRA_API_KEY}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(body),
+  }), timeoutMs);
+}
+
 async function sendWhatsAppMessage(to, message) {
   if (!CHAKRA_API_KEY || !CHAKRA_PLUGIN_ID || !CHAKRA_PHONE_NUMBER_ID) {
     console.error('Chakra credentials not fully configured — cannot send message.');
@@ -76,14 +92,7 @@ async function sendWhatsAppMessage(to, message) {
     return;
   }
 
-  const res = await withTimeout(fetch(chakraSendUrl(), {
-    method: 'POST',
-    headers: {
-      Authorization: `Bearer ${CHAKRA_API_KEY}`,
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify(body),
-  }), 10000);
+  const res = await postToChakra(body, 10000);
 
   if (!res.ok) {
     const errText = await res.text().catch(() => '');
@@ -100,19 +109,12 @@ async function sendWhatsAppMessage(to, message) {
 async function markAsRead(messageId) {
   if (!CHAKRA_API_KEY || !CHAKRA_PLUGIN_ID || !CHAKRA_PHONE_NUMBER_ID || !messageId) return;
   try {
-    const res = await withTimeout(fetch(chakraSendUrl(), {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${CHAKRA_API_KEY}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        messaging_product: 'whatsapp',
-        status: 'read',
-        message_id: messageId,
-        typing_indicator: { type: 'text' },
-      }),
-    }), 5000);
+    const res = await postToChakra({
+      messaging_product: 'whatsapp',
+      status: 'read',
+      message_id: messageId,
+      typing_indicator: { type: 'text' },
+    }, 5000);
     if (!res.ok) {
       const errText = await res.text().catch(() => '');
       console.warn(`Mark-as-read failed for message ${messageId} (HTTP ${res.status}): ${errText}`);
@@ -161,6 +163,36 @@ const DRIVER_NUMBERS = [
   '5016162492',
 ];
 
+// Single source of truth for "does this customer have a saved note" — both
+// notifyDriver and escalateToHuman need it (in different wording/languages
+// for different audiences), so the LOOKUP is shared even though the
+// formatting deliberately isn't.
+function getCustomerNote(from) {
+  const profile = customerProfiles[from];
+  return (profile && profile.notes) || null;
+}
+
+// Same idea, for the saved-delivery-address offer in the 'mode'/'address'
+// steps — both read this exact expression.
+function getSavedAddress(from) {
+  const profile = customerProfiles[from];
+  return (profile && profile.savedAddress) || null;
+}
+
+// Broadcasts one message to every driver number, best-effort (one failure
+// doesn't stop the rest). Shared by notifyDriver, escalateToHuman, and the
+// "cancel order" command's driver notification — all three previously
+// hand-rolled their own version of this same loop.
+async function notifyAllDrivers(message) {
+  for (const driverNumber of DRIVER_NUMBERS) {
+    try {
+      await sendWhatsAppMessage(driverNumber, message);
+    } catch (err) {
+      console.error(`Driver notification failed for ${driverNumber}:`, err.message || err);
+    }
+  }
+}
+
 async function notifyDriver(orderNumber, session, from) {
   if (DRIVER_NUMBERS.length === 0) return;
 
@@ -175,22 +207,16 @@ async function notifyDriver(orderNumber, session, from) {
 
   const preorderTag = session.isPreorder ? (session.language === 'es' ? '🕐 *PRE-PEDIDO — armar cuando abramos*\n\n' : '🕐 *PRE-ORDER — prep when we open*\n\n') : '';
 
-  const profile = customerProfiles[from];
-  const noteTag = profile && profile.notes
-    ? (session.language === 'es' ? `\n\n⚠️ *Nota del cliente:* ${profile.notes}` : `\n\n⚠️ *Customer note:* ${profile.notes}`)
+  const note = getCustomerNote(from);
+  const noteTag = note
+    ? (session.language === 'es' ? `\n\n⚠️ *Nota del cliente:* ${note}` : `\n\n⚠️ *Customer note:* ${note}`)
     : '';
 
   const message = preorderTag + (session.language === 'es'
     ? `🏍️ *NUEVA ORDEN DE ENTREGA #${orderNumber}*\n${divider}\n🛍️ *Artículos:*\n${itemLines}\n${divider}\n💵 *Total a cobrar: $${total} BZD*\n\n📍 *Entregar a:*\n${session.address}\n📞 *Teléfono del cliente:* +${from}${noteTag}`
     : `🏍️ *NEW DELIVERY ORDER #${orderNumber}*\n${divider}\n🛍️ *Items:*\n${itemLines}\n${divider}\n💵 *Total to collect: $${total} BZD*\n\n📍 *Deliver to:*\n${session.address}\n📞 *Customer phone:* +${from}${noteTag}`);
 
-  for (const driverNumber of DRIVER_NUMBERS) {
-    try {
-      await sendWhatsAppMessage(driverNumber, message);
-    } catch (err) {
-      console.error('Driver notification error:', err.message || err);
-    }
-  }
+  await notifyAllDrivers(message);
 }
 
 const sheetsAuth = new google.auth.JWT({
@@ -341,6 +367,37 @@ async function logOrderToSheets(orderNumber, session, from) {
   }
 }
 
+// Strips a Sheets phone cell (e.g. "'+50161234567") down to bare digits for
+// comparison — the one normalization every phone-matching/lookup site needs.
+function normalizePhoneDigits(cell) {
+  return (cell || '').replace(/\D/g, '');
+}
+
+// Shared by every owner/customer command that just needs to READ the
+// Manager sheet (cancelOrderInSheet's row-finding, QUEUE, STATS, the
+// "status" command) — NOT used by pollOrderStatus, which has its own
+// first-run-vs-steady-state logic that doesn't fit this shape. Short-lived
+// cache (a few seconds) so an owner running "queue" then "stats" back to
+// back — or a burst of customers checking "status" at once — doesn't
+// re-fetch data that hasn't meaningfully changed; long enough to help the
+// common case, short enough that nobody's ever looking at data more than a
+// few seconds stale.
+const MANAGER_ROWS_CACHE_MS = 5000;
+let managerRowsCache = null; // { rows, fetchedAt }
+
+async function fetchManagerRows() {
+  if (managerRowsCache && Date.now() - managerRowsCache.fetchedAt < MANAGER_ROWS_CACHE_MS) {
+    return managerRowsCache.rows;
+  }
+  const res = await withTimeout(sheets.spreadsheets.values.get({
+    spreadsheetId: process.env.GOOGLE_SHEETS_ID,
+    range: 'Manager!A2:H',
+  }), 8000);
+  const rows = res.data.values || [];
+  managerRowsCache = { rows, fetchedAt: Date.now() };
+  return rows;
+}
+
 // Powers the post-confirmation cancel window (see the "cancel order"
 // command). Matches by BOTH order number AND phone — matching by order
 // number alone would risk touching the wrong row if a stale duplicate
@@ -355,6 +412,9 @@ async function cancelOrderInSheet(orderNumber, from) {
   // serializing it against order writes anyway removes any doubt about
   // overlapping requests hitting the same Manager sheet at once.
   return withSessionLock('__sheets_manager_kitchen_write__', async () => {
+    // Bypasses fetchManagerRows' cache deliberately — this is about to WRITE
+    // based on the row it finds, so it needs the freshest possible read,
+    // not a value that might be a few seconds stale.
     const res = await withTimeout(sheets.spreadsheets.values.get({
       spreadsheetId: process.env.GOOGLE_SHEETS_ID,
       range: 'Manager!A2:H',
@@ -362,8 +422,7 @@ async function cancelOrderInSheet(orderNumber, from) {
     const rows = res.data.values || [];
     for (let i = 0; i < rows.length; i++) {
       const [rowOrderNumber, , , , , , phoneCell] = rows[i];
-      const phoneDigits = (phoneCell || '').replace(/\D/g, '');
-      if (String(rowOrderNumber) === String(orderNumber) && phoneDigits === String(from)) {
+      if (String(rowOrderNumber) === String(orderNumber) && normalizePhoneDigits(phoneCell) === String(from)) {
         const rowNum = i + 2; // range above starts at row 2 (header is row 1)
         await withTimeout(sheets.spreadsheets.values.update({
           spreadsheetId: process.env.GOOGLE_SHEETS_ID,
@@ -371,6 +430,7 @@ async function cancelOrderInSheet(orderNumber, from) {
           valueInputOption: 'USER_ENTERED',
           requestBody: { values: [['Cancelled']] },
         }), 6000);
+        managerRowsCache = null; // this row just changed — don't let a stale cached copy answer the next QUEUE/STATS/status lookup
         return true;
       }
     }
@@ -381,11 +441,7 @@ async function cancelOrderInSheet(orderNumber, from) {
 // Owner-facing QUEUE command: how many orders are still open (i.e. not yet
 // Completed or Cancelled), broken down by status.
 async function getQueueSummary() {
-  const res = await withTimeout(sheets.spreadsheets.values.get({
-    spreadsheetId: process.env.GOOGLE_SHEETS_ID,
-    range: 'Manager!A2:H',
-  }), 8000);
-  const rows = res.data.values || [];
+  const rows = await fetchManagerRows();
   const counts = {};
   let total = 0;
   for (const row of rows) {
@@ -407,11 +463,7 @@ async function getQueueSummary() {
 // other home. `itemsWithPrice` cells look like "Vanilla Bean x2 - $14.00;
 // Coffee x1 - $7.00" — stripping back to bare item names for the tally.
 async function getOrderStats() {
-  const res = await withTimeout(sheets.spreadsheets.values.get({
-    spreadsheetId: process.env.GOOGLE_SHEETS_ID,
-    range: 'Manager!A2:H',
-  }), 8000);
-  const rows = res.data.values || [];
+  const rows = await fetchManagerRows();
   const itemCounts = {};
   const hourCounts = {};
   let confirmedCount = 0;
@@ -739,7 +791,7 @@ async function refreshCustomerProfiles() {
     const next = {};
     for (const row of rows) {
       const [phoneCell, savedAddress, notes, updatedAt] = row;
-      const phone = (phoneCell || '').replace(/\D/g, '');
+      const phone = normalizePhoneDigits(phoneCell);
       if (!phone) continue;
       next[phone] = { savedAddress: savedAddress || '', notes: notes || '', updatedAt: updatedAt || '' };
     }
@@ -769,7 +821,7 @@ async function saveCustomerProfile(from, fields) {
       range: 'Customers!A2:D',
     }), 8000);
     const rows = res.data.values || [];
-    const rowIndex = rows.findIndex(r => (r[0] || '').replace(/\D/g, '') === String(from));
+    const rowIndex = rows.findIndex(r => normalizePhoneDigits(r[0]) === String(from));
     const rowValues = [`'+${from}`, merged.savedAddress || '', merged.notes || '', merged.updatedAt];
     const rowNum = rowIndex >= 0 ? rowIndex + 2 : rows.length + 2; // +2: range starts at row 2 (header is row 1)
     await withTimeout(sheets.spreadsheets.values.update({
@@ -1307,6 +1359,16 @@ function replySummaryText(textOrMessages) {
   }).filter(Boolean).join(' | ').slice(0, 300);
 }
 
+// Normalizes a sendReply-shaped `reply` (string or array) to an array and
+// appends/prepends onto it — the escalation ladder below needed this same
+// "normalize then splice in extra bubbles" step at every rung.
+function appendReply(reply, ...extra) {
+  return [...(Array.isArray(reply) ? reply : [reply]), ...extra];
+}
+function prependReply(reply, ...extra) {
+  return [...extra, ...(Array.isArray(reply) ? reply : [reply])];
+}
+
 function transcriptText(session) {
   if (!session.transcript || session.transcript.length === 0) return '(no transcript)';
   return session.transcript.map(e => `${e.role === 'customer' ? '👤' : '🤖'} ${e.text}`).join('\n');
@@ -1317,13 +1379,11 @@ function transcriptText(session) {
 // context so the customer never has to repeat themselves either way.
 function escalateToHuman(from, session, lang, reasonLine) {
   const cartSummary = session.cart.length > 0 ? `\n\nCart:\n${cartText(session.cart, lang)}` : '';
-  const profile = customerProfiles[from];
-  const noteTag = profile && profile.notes ? `\n⚠️ Customer note: ${profile.notes}` : '';
+  const note = getCustomerNote(from);
+  const noteTag = note ? `\n⚠️ Customer note: ${note}` : '';
   const staffMsg = `🔔 ${reasonLine}\nCustomer: +${from} (step: ${session.step})${noteTag}${cartSummary}\n\n📝 Recent conversation:\n${transcriptText(session)}`;
   if (process.env.DEBUG_REPLIES) console.log('ESCALATE >>>', staffMsg);
-  DRIVER_NUMBERS.forEach(num => {
-    sendWhatsAppMessage(num, staffMsg).catch(err => console.error(`Escalation notify failed for ${num}:`, err.message || err));
-  });
+  notifyAllDrivers(staffMsg); // fire-and-forget — notifyAllDrivers catches every send internally, so this promise can't reject
 }
 
 // ---- CART HELPERS ----
@@ -1956,6 +2016,97 @@ app.post('/whatsapp', async (req, res) => {
   });
 });
 
+// Shared by the 'menu' and 'item' steps' "done"/checkout handling — the
+// only real difference between those two call sites was which view to fall
+// back to when the cart is empty. Returns the reply value for that branch;
+// mutates session.step/funnelCounters same as the original inline code did.
+function tryCheckout(session, lang, emptyCartFallbackViews) {
+  const t = TXT[lang];
+  if (session.cart.length === 0) {
+    return [t.cartEmptyCheckout, ...emptyCartFallbackViews];
+  }
+  if (ordersPaused) {
+    return t.ordersPausedMsg;
+  }
+  // Checkout proceeds even while closed — confirming becomes a pre-order
+  // instead of a dead end (see the 'confirm' step's isPreorder handling).
+  session.step = 'mode';
+  funnelCounters.checkoutStarted++;
+  return [cartText(session.cart, lang), modeButtonsMessage(SHOP_INFO.deliveryFee, lang)];
+}
+
+// Table-driven owner commands (see OWNER_NUMBERS above for the full list
+// and what each does). `match(msg, rawMsg)` returns a truthy value if this
+// entry applies — `true` for a plain command, or a regex match array whose
+// captures the handler needs — and `handler(match)` does the work and
+// returns the reply text. Adding a 7th command is one entry here instead of
+// a new if-block hand-wired into the main flow, and this is the one place
+// any future cross-cutting behavior (logging every owner command, rate-
+// limiting them, etc.) would go.
+const OWNER_COMMANDS = [
+  {
+    match: (msg) => msg === 'pause orders',
+    handler: async () => {
+      ordersPaused = true;
+      return '⏸️ Orders paused. New checkouts will be blocked until you send "resume orders".';
+    },
+  },
+  {
+    match: (msg) => msg === 'resume orders',
+    handler: async () => {
+      ordersPaused = false;
+      return '▶️ Orders resumed — customers can check out again.';
+    },
+  },
+  {
+    match: (msg, rawMsg) => rawMsg.trim().match(/^soldout\s+(.+)/i),
+    handler: async (match) => {
+      const found = findMenuItemByName(match[1]);
+      if (!found) return `Couldn't find a menu item matching "${match[1]}".`;
+      await setItemAvailability(found.categoryId, found.itemIndex, false);
+      return `😔 Marked *${found.item.name}* sold out.`;
+    },
+  },
+  {
+    match: (msg, rawMsg) => rawMsg.trim().match(/^(instock|available)\s+(.+)/i),
+    handler: async (match) => {
+      const found = findMenuItemByName(match[2]);
+      if (!found) return `Couldn't find a menu item matching "${match[2]}".`;
+      await setItemAvailability(found.categoryId, found.itemIndex, true);
+      return `✅ Marked *${found.item.name}* back in stock.`;
+    },
+  },
+  {
+    match: (msg) => msg === 'queue',
+    handler: async () => {
+      try {
+        const { total, counts } = await getQueueSummary();
+        const breakdown = Object.entries(counts).map(([status, n]) => `  ${status}: ${n}`).join('\n') || '  (nothing open)';
+        return `📋 *${total} open order${total === 1 ? '' : 's'}*\n${breakdown}`;
+      } catch (err) {
+        console.error('QUEUE command failed:', err.message || err);
+        return "Sorry, couldn't read the order queue right now — try again in a moment.";
+      }
+    },
+  },
+  {
+    match: (msg) => msg === 'stats',
+    handler: async () => {
+      try {
+        const { confirmedCount, topItems, peakHour } = await getOrderStats();
+        const topItemsText = topItems.length > 0
+          ? topItems.map(([name, n], i) => `  ${i + 1}. ${name} (${n})`).join('\n')
+          : '  (no orders yet)';
+        const peakHourText = peakHour === null ? 'n/a' : formatHour12(peakHour);
+        return `📊 *Stats*\n\n*All-time confirmed orders:* ${confirmedCount}\n*Peak hour:* ${peakHourText}\n*Top items:*\n${topItemsText}\n\n*Since server start:*\n  Language picked: ${funnelCounters.languageSelected}\n  Checkout started: ${funnelCounters.checkoutStarted}\n  Carts abandoned (30+ min idle): ${funnelCounters.cartAbandoned}`;
+      } catch (err) {
+        console.error('STATS command failed:', err.message || err);
+        return "Sorry, couldn't compute stats right now — try again in a moment.";
+      }
+    },
+  },
+];
+
 async function processWhatsAppMessage(message, res) {
   const from = message.from; // bare digits with country code, e.g. "50161234567" — no '+', already validated above
   try {
@@ -2016,50 +2167,13 @@ async function processWhatsAppMessage(message, res) {
     // state (language picked or not, mid-order or not) — these are
     // administrative overrides, not part of the customer conversation flow.
     // English-only replies: this is a staff tool, not customer-facing UX.
+    // See OWNER_COMMANDS above for the actual command table.
     if (isOwner(from)) {
-      if (msg === 'pause orders') {
-        ordersPaused = true;
-        return sendReply(res, from, '⏸️ Orders paused. New checkouts will be blocked until you send "resume orders".');
-      }
-      if (msg === 'resume orders') {
-        ordersPaused = false;
-        return sendReply(res, from, '▶️ Orders resumed — customers can check out again.');
-      }
-      const soldOutMatch = rawMsg.trim().match(/^soldout\s+(.+)/i);
-      if (soldOutMatch) {
-        const found = findMenuItemByName(soldOutMatch[1]);
-        if (!found) return sendReply(res, from, `Couldn't find a menu item matching "${soldOutMatch[1]}".`);
-        await setItemAvailability(found.categoryId, found.itemIndex, false);
-        return sendReply(res, from, `😔 Marked *${found.item.name}* sold out.`);
-      }
-      const inStockMatch = rawMsg.trim().match(/^(instock|available)\s+(.+)/i);
-      if (inStockMatch) {
-        const found = findMenuItemByName(inStockMatch[2]);
-        if (!found) return sendReply(res, from, `Couldn't find a menu item matching "${inStockMatch[2]}".`);
-        await setItemAvailability(found.categoryId, found.itemIndex, true);
-        return sendReply(res, from, `✅ Marked *${found.item.name}* back in stock.`);
-      }
-      if (msg === 'queue') {
-        try {
-          const { total, counts } = await getQueueSummary();
-          const breakdown = Object.entries(counts).map(([status, n]) => `  ${status}: ${n}`).join('\n') || '  (nothing open)';
-          return sendReply(res, from, `📋 *${total} open order${total === 1 ? '' : 's'}*\n${breakdown}`);
-        } catch (err) {
-          console.error('QUEUE command failed:', err.message || err);
-          return sendReply(res, from, 'Sorry, couldn\'t read the order queue right now — try again in a moment.');
-        }
-      }
-      if (msg === 'stats') {
-        try {
-          const { confirmedCount, topItems, peakHour } = await getOrderStats();
-          const topItemsText = topItems.length > 0
-            ? topItems.map(([name, n], i) => `  ${i + 1}. ${name} (${n})`).join('\n')
-            : '  (no orders yet)';
-          const peakHourText = peakHour === null ? 'n/a' : formatHour12(peakHour);
-          return sendReply(res, from, `📊 *Stats*\n\n*All-time confirmed orders:* ${confirmedCount}\n*Peak hour:* ${peakHourText}\n*Top items:*\n${topItemsText}\n\n*Since server start:*\n  Language picked: ${funnelCounters.languageSelected}\n  Checkout started: ${funnelCounters.checkoutStarted}\n  Carts abandoned (30+ min idle): ${funnelCounters.cartAbandoned}`);
-        } catch (err) {
-          console.error('STATS command failed:', err.message || err);
-          return sendReply(res, from, 'Sorry, couldn\'t compute stats right now — try again in a moment.');
+      for (const cmd of OWNER_COMMANDS) {
+        const match = cmd.match(msg, rawMsg);
+        if (match) {
+          const replyText = await cmd.handler(match);
+          return sendReply(res, from, replyText);
         }
       }
     }
@@ -2175,11 +2289,7 @@ async function processWhatsAppMessage(message, res) {
         return sendReply(res, from, t.noPreviousOrder);
       }
       try {
-        const statusRes = await withTimeout(sheets.spreadsheets.values.get({
-          spreadsheetId: process.env.GOOGLE_SHEETS_ID,
-          range: 'Manager!A2:H',
-        }), 8000);
-        const rows = statusRes.data.values || [];
+        const rows = await fetchManagerRows();
         let foundStatus = null;
         // Match by BOTH order number AND phone — order numbers are random
         // 4-digit values (~9000 possible), so matching by number alone risks
@@ -2187,8 +2297,7 @@ async function processWhatsAppMessage(message, res) {
         // Same rule cancelOrderInSheet already follows, for the same reason.
         for (const row of rows) {
           const [orderNumber, , , , , , phoneCell, statusCell] = row;
-          const phoneDigits = (phoneCell || '').replace(/\D/g, '');
-          if (String(orderNumber) === String(last.orderNumber) && phoneDigits === String(from)) {
+          if (String(orderNumber) === String(last.orderNumber) && normalizePhoneDigits(phoneCell) === String(from)) {
             foundStatus = (statusCell || 'Confirmed').trim();
           }
         }
@@ -2211,10 +2320,7 @@ async function processWhatsAppMessage(message, res) {
           return sendReply(res, from, t.cancelOrderNotFound(SHOP_INFO.phone));
         }
         if (last.mode === 'delivery') {
-          const cancelMsg = `❌ Order #${last.orderNumber} was cancelled by the customer (within the 3-minute window).`;
-          DRIVER_NUMBERS.forEach(num => {
-            sendWhatsAppMessage(num, cancelMsg).catch(err => console.error(`Cancel-order driver notify failed for ${num}:`, err.message || err));
-          });
+          notifyAllDrivers(`❌ Order #${last.orderNumber} was cancelled by the customer (within the 3-minute window).`);
         }
         const cancelledOrderNumber = last.orderNumber;
         delete lastOrders[from]; // one cancel per confirmed order — prevents a second cancel attempt on an already-cancelled order
@@ -2235,11 +2341,11 @@ async function processWhatsAppMessage(message, res) {
     // gets stuck without them realizing why.
     if (session.step !== 'notes' && session.step !== 'address' && /^(note|nota)\s+\S/i.test(rawMsg.trim())) {
       const noteText = rawMsg.trim().replace(/^(note|nota)\s+/i, '').slice(0, 200);
-      try {
-        await saveCustomerProfile(from, { notes: noteText });
-      } catch (err) {
-        console.error(`Failed to save note for ${from}:`, err.message || err);
-      }
+      // Fire-and-forget, same as the delivery-address save below —
+      // saveCustomerProfile updates the in-memory customerProfiles cache
+      // synchronously before its own network write, so the customer doesn't
+      // need to wait on a Sheets round-trip just to see "note saved".
+      saveCustomerProfile(from, { notes: noteText }).catch(err => console.error(`Failed to save note for ${from}:`, err.message || err));
       return sendReply(res, from, t.noteSaved);
     }
 
@@ -2292,17 +2398,7 @@ async function processWhatsAppMessage(message, res) {
             ];
           }
         } else if (msg === 'done' || msg === 'listo' || msg === 'checkout') {
-          if (session.cart.length === 0) {
-            reply = [t.cartEmptyCheckout, ...categoryListMessages(lang)];
-          } else if (ordersPaused) {
-            reply = t.ordersPausedMsg;
-          } else {
-            // Checkout proceeds even while closed — confirming becomes a
-            // pre-order instead of a dead end (see the 'confirm' step below).
-            session.step = 'mode';
-            funnelCounters.checkoutStarted++;
-            reply = [cartText(session.cart, lang), modeButtonsMessage(SHOP_INFO.deliveryFee, lang)];
-          }
+          reply = tryCheckout(session, lang, categoryListMessages(lang));
         } else {
           const faqKey = matchFAQKeyword(msg);
           if (faqKey) {
@@ -2351,15 +2447,7 @@ async function processWhatsAppMessage(message, res) {
         }
 
         if (msg === 'done' || msg === 'listo' || msg === 'checkout') {
-          if (session.cart.length === 0) {
-            reply = [t.cartEmptyCheckout, categoryItemsListMessage(cat, lang)];
-          } else if (ordersPaused) {
-            reply = t.ordersPausedMsg;
-          } else {
-            session.step = 'mode';
-            funnelCounters.checkoutStarted++;
-            reply = [cartText(session.cart, lang), modeButtonsMessage(SHOP_INFO.deliveryFee, lang)];
-          }
+          reply = tryCheckout(session, lang, [categoryItemsListMessage(cat, lang)]);
           break;
         }
 
@@ -2539,7 +2627,7 @@ async function processWhatsAppMessage(message, res) {
         } else if (msg.includes('delivery') || msg.includes('entrega')) {
           session.mode = 'delivery';
           session.step = 'address';
-          const savedAddr = customerProfiles[from] && customerProfiles[from].savedAddress;
+          const savedAddr = getSavedAddress(from);
           reply = savedAddr ? savedAddressButtonsMessage(savedAddr, lang) : t.askAddress(SHOP_INFO.deliveryFee);
         } else {
           // Didn't say pickup/delivery — maybe they're adding one more item first.
@@ -2560,7 +2648,7 @@ async function processWhatsAppMessage(message, res) {
           reply = modeButtonsMessage(SHOP_INFO.deliveryFee, lang);
           break;
         }
-        const savedAddr = customerProfiles[from] && customerProfiles[from].savedAddress;
+        const savedAddr = getSavedAddress(from);
         if (msg === 'use_saved_address' && savedAddr) {
           session.address = savedAddr;
           session.step = 'confirm';
@@ -2691,7 +2779,6 @@ async function processWhatsAppMessage(message, res) {
       // that are inherently free-text (quantity/notes/address) get just the
       // text redirect toward MENU/AGENT, no buttons.
       if (session.parseFailureStreak >= 2) {
-        const replyArr = Array.isArray(reply) ? reply : [reply];
         let fallbackButtons = [];
         if (session.step === 'menu' || session.step === 'item') {
           fallbackButtons = categoryListMessages(lang);
@@ -2703,7 +2790,7 @@ async function processWhatsAppMessage(message, res) {
           const reconfirm = session.mode === 'delivery' ? t.deliveryConfirm(session.address) : t.pickupConfirm;
           fallbackButtons = [confirmButtonsMessage(reconfirm, lang)];
         }
-        reply = [...replyArr, t.stopGuessing, ...fallbackButtons];
+        reply = appendReply(reply, t.stopGuessing, ...fallbackButtons);
       }
 
       // One-way ratchet per session (escalationStage only moves up) so the
@@ -2711,16 +2798,13 @@ async function processWhatsAppMessage(message, res) {
       if (session.frustrationScore >= FRUSTRATION_ESCALATE_THRESHOLD && session.escalationStage < 3) {
         session.escalationStage = 3;
         escalateToHuman(from, session, lang, 'Auto-escalated: customer seems frustrated.');
-        const replyArr = Array.isArray(reply) ? reply : [reply];
-        reply = [...replyArr, t.agentRequested(SHOP_INFO.phone)];
+        reply = appendReply(reply, t.agentRequested(SHOP_INFO.phone));
       } else if (session.frustrationScore >= FRUSTRATION_SHORTCUT_THRESHOLD && session.escalationStage < 2) {
         session.escalationStage = 2;
-        const replyArr = Array.isArray(reply) ? reply : [reply];
-        reply = [...replyArr, t.frustrationShortcut];
+        reply = appendReply(reply, t.frustrationShortcut);
       } else if (session.frustrationScore >= FRUSTRATION_SOFTEN_THRESHOLD && session.escalationStage < 1) {
         session.escalationStage = 1;
-        const replyArr = Array.isArray(reply) ? reply : [reply];
-        reply = [t.frustrationSoften, ...replyArr];
+        reply = prependReply(reply, t.frustrationSoften);
       }
     }
 
