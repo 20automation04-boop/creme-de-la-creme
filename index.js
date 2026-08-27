@@ -2028,7 +2028,13 @@ const NATURAL_COMMANDS = [
   // steal plain "my order" from the cart lookup below.
   {
     cmd: 'status',
-    re: /\b(where('?s| is)?\s*(my|the)\s*(order|food)|is (my|the) (order|food) (ready|done|coming)|how('?s| is| long for) (my|the) (order|food)|track (my )?order|order status|what happened (to|with) (my|the) (order|food)|any (update|news) (on|about) (my|the) (order|food)|when (will|is|does) (my|the) (order|food)|how long (until|for|till)|status of (my|the) order)\b|\b(d[oó]nde (est[aá]|va|anda) mi (orden|pedido|comida)|c[oó]mo va mi (orden|pedido)|estado de mi (orden|pedido)|ya (est[aá] (lista|listo)|viene|sali[oó])|qu[eé] pas[oó] con mi (orden|pedido)|hay (novedades|noticias|alguna novedad)|cu[aá]ndo (llega|estar[aá]|sale)|cu[aá]nto (falta|tarda|demora))/i,
+    re: /\b(where('?s| is)?\s*(my|the)\s*(order|food)|is (my|the) (order|food) (ready|done|coming)|how('?s| is| long for) (my|the) (order|food)|track (my )?order|order status|what happened (to|with) (my|the) (order|food)|any (update|news) (on|about) (my|the) (order|food)|when (will|is|does) (my|the) (order|food)|status of (my|the) order)\b|\b(d[oó]nde (est[aá]|va|anda) mi (orden|pedido|comida)|c[oó]mo va mi (orden|pedido)|estado de mi (orden|pedido)|ya (est[aá] (lista|listo)|viene|sali[oó])|qu[eé] pas[oó] con mi (orden|pedido)|hay (novedades|noticias|alguna novedad)|cu[aá]ndo (llega|estar[aá]|sale)|cu[aá]nto (falta|tarda|demora) (para )?(mi|el) (orden|pedido))/i,
+    // Bare "how long?" / "cuánto falta?" mean the order only when they ARE
+    // the whole message. Inside a sentence they are ordinary pre-order FAQ
+    // questions ("how long for delivery?", "¿cuánto tarda la entrega?"),
+    // and this runs before matchFAQKeyword, so a loose match answered them
+    // with "you don't have a previous order".
+    whole: /^(how long|how long more|how much longer|cu[aá]nto falta|cu[aá]nto (tarda|demora))$/i,
   },
 
   // Human handoff.
@@ -2037,7 +2043,7 @@ const NATURAL_COMMANDS = [
   // Cart contents.
   {
     cmd: 'cart',
-    re: /\b(what('?s| is| was| do i have)?\s*(in )?(my|the) (cart|order|basket)|show (me )?(my|the) (cart|order)|see (my|the) (cart|order)|my cart|check (my )?cart|how much (is it|do i owe|so far)|what did i (order|get|add|ask for)|review (my )?order)\b|\b(qu[eé] (tengo|llevo)( en el carrito| hasta ahora)?|ver (mi|el) (carrito|orden|pedido)|mi carrito|cu[aá]nto (es|va|llevo)|mu[eé]strame (mi|el) (orden|carrito|pedido)|cu[aá]l (fue|es) mi (orden|pedido)|qu[eé] (ped[ií]|orden[eé]|agregu[eé]))/i,
+    re: /\b(what('?s| is| was| do i have)?\s*(in )?(my|the) (cart|order|basket)|show (me )?(my|the) (cart|order)|see (my|the) (cart|order)|my cart|check (my )?cart|how much (is it|do i owe|so far)|what did i (order|get|add|ask for)|review (my )?order)\b|\b(qu[eé] (tengo|llevo)(?!\s+que\b)( en el carrito| hasta ahora)?|ver (mi|el) (carrito|orden|pedido)|mi carrito|cu[aá]nto (es|va|llevo)|mu[eé]strame (mi|el) (orden|carrito|pedido)|cu[aá]l (fue|es) mi (orden|pedido)|qu[eé] (ped[ií]|orden[eé]|agregu[eé])(?![a-zà-ÿ]))/i,
     // Bare "my order" / "mi pedido" with nothing else — unambiguous on its
     // own, but far too common inside longer sentences to trust anywhere.
     whole: /^(my (order|cart)|mi (orden|pedido|carrito)|el pedido|la orden)$/i,
@@ -2052,7 +2058,7 @@ const NATURAL_COMMANDS = [
   },
 
   // Instructions.
-  { cmd: 'help', re: /\b(how does this work|how do i (order|use)|i('?m| am)? ?(lost|confused)|don'?t understand|what do i do|instructions)\b|\b(c[oó]mo funciona|c[oó]mo (ordeno|pido|hago)|no entiendo|estoy perdid|instrucciones)/i },
+  { cmd: 'help', re: /\b(how does this work|how do i (order|use)|i('?m| am)? ?(lost|confused)|don'?t understand|what do i do|instructions)\b|\b(c[oó]mo funciona|c[oó]mo (ordeno|pido|hago)|no entiendo|estoy perdid|qu[eé] (tengo|hay) que hacer|qu[eé] hago|instrucciones)/i },
 
   // Back to the category list.
   { cmd: 'menu', re: /\b(show (me )?(the )?menu|see (the )?menu|go (back )?to (the )?menu|other (categories|options)|full menu)\b|\b(ver (el )?men[uú]|mu[eé]strame el men[uú]|otras (categor[ií]as|opciones)|men[uú] completo)/i },

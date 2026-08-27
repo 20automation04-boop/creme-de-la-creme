@@ -1,0 +1,12 @@
+{
+  "name": "spanish-stuck-and-faq-phrases-not-hijacked-into-cart-or-status",
+  "from": "19990000031",
+  "turns": [
+    { "in": "2", "expectStep": "menu" },
+    { "in": "¿cuánto tarda la entrega?", "expectStep": "menu", "expectReplyContains": "entrega", "expectReplyNotContains": "orden anterior" },
+    { "in": "no entiendo qué tengo que hacer", "expectStep": "menu", "expectReplyContains": "cómo ordenar", "expectReplyNotContains": "carrito está vacío" },
+    { "in": "qué tengo que hacer para ordenar", "expectStep": "menu", "expectReplyContains": "cómo ordenar", "expectReplyNotContains": "carrito está vacío" },
+    { "in": "qué tengo", "expectStep": "menu", "expectReplyContains": "carrito está vacío" },
+    { "in": "cuánto falta", "expectStep": "menu", "expectReplyContains": "orden anterior" }
+  ]
+}

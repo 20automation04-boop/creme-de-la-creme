@@ -1,0 +1,10 @@
+{
+  "name": "pre-order-faq-questions-not-hijacked-by-status-command",
+  "from": "19990000030",
+  "turns": [
+    { "in": "1", "expectStep": "menu" },
+    { "in": "how long for delivery?", "expectStep": "menu", "expectReplyContains": "deliver", "expectReplyNotContains": "previous order" },
+    { "in": "how long until you close?", "expectStep": "menu", "expectReplyContains": "open", "expectReplyNotContains": "previous order" },
+    { "in": "how long", "expectStep": "menu", "expectReplyContains": "previous order" }
+  ]
+}
