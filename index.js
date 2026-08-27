@@ -1314,7 +1314,7 @@ const TXT = {
 
 *How to order:*
 1️⃣ Reply with a category number to browse
-2️⃣ Or just type what you want, e.g. "2 hot dogs, no onion, and a large mango smoothie, extra ice"
+2️⃣ Type it out, or send a voice note 🎙️ — e.g. "2 hot dogs, no onion, and a large mango smoothie, extra ice." Speaking clearly helps us catch every detail!
 3️⃣ Ask us anything — hours, delivery, payment methods
 4️⃣ Add more items any time, even mid-order — nothing locks in until you confirm ✅
 
@@ -1325,7 +1325,7 @@ Type *help* anytime to see all commands (cart, status, cancel, and more).`,
 
 *How to order:*
 1️⃣ Reply with a category number to browse
-2️⃣ Or just type what you want, e.g. "2 hot dogs, no onion, and a large mango smoothie, extra ice"
+2️⃣ Type it out, or send a voice note 🎙️ — e.g. "2 hot dogs, no onion, and a large mango smoothie, extra ice." Speaking clearly helps us catch every detail!
 3️⃣ Ask us anything — hours, delivery, payment methods
 4️⃣ You can add more items any time, even mid-order — nothing locks in until you confirm ✅
 
@@ -1409,7 +1409,7 @@ Type *help* anytime to see all commands (cart, status, cancel, and more).`,
 
 *Cómo ordenar:*
 1️⃣ Responde con el número de una categoría para explorar
-2️⃣ O simplemente escribe lo que quieres, ej. "2 hot dogs, sin cebolla, y un smoothie grande de mango, con hielo extra"
+2️⃣ Escríbelo, o envía una nota de voz 🎙️ — ej. "2 hot dogs, sin cebolla, y un smoothie grande de mango, con hielo extra." ¡Hablar claro nos ayuda a captar cada detalle!
 3️⃣ Pregúntanos lo que sea — horario, entregas, formas de pago
 4️⃣ Añade más artículos cuando quieras, incluso a mitad de la orden — nada queda fijo hasta que confirmes ✅
 
@@ -1420,7 +1420,7 @@ Escribe *help* cuando quieras para ver todos los comandos (cart, status, cancel,
 
 *Cómo ordenar:*
 1️⃣ Responde con el número de una categoría para explorar
-2️⃣ O simplemente escribe lo que quieres, ej. "2 hot dogs, sin cebolla, y un smoothie grande de mango, con hielo extra"
+2️⃣ Escríbelo, o envía una nota de voz 🎙️ — ej. "2 hot dogs, sin cebolla, y un smoothie grande de mango, con hielo extra." ¡Hablar claro nos ayuda a captar cada detalle!
 3️⃣ Pregúntanos lo que sea — horario, entregas, formas de pago
 4️⃣ Puedes añadir más artículos en cualquier momento, incluso a mitad de la orden — nada queda fijo hasta que confirmes ✅
 
@@ -2162,18 +2162,18 @@ function faqAnswer(key, lang) {
   const s = SHOP_INFO;
   const answers = {
     en: {
-      hours: `We're open ${s.hoursEn}.`,
-      deliveryFee: `Delivery is $${s.deliveryFee} BZD within ${s.deliveryAreasEn}, usually ${s.deliveryTimeEn}. Minimum order for delivery is $${s.minDeliveryOrder} BZD.`,
-      deliveryGeneral: `Yes, we deliver! $${s.deliveryFee} BZD within ${s.deliveryAreasEn}, usually ${s.deliveryTimeEn}. Minimum order $${s.minDeliveryOrder} BZD.`,
-      payment: s.paymentEn,
-      location: `We're based in ${s.deliveryAreasEn}. For exact directions, best to call us.`,
+      hours: `🕐 We're open ${s.hoursEn}!`,
+      deliveryFee: `🏍️ Delivery is $${s.deliveryFee} BZD within ${s.deliveryAreasEn}, usually ${s.deliveryTimeEn}. Minimum order for delivery is $${s.minDeliveryOrder} BZD.`,
+      deliveryGeneral: `🏍️ Yes, we deliver! $${s.deliveryFee} BZD within ${s.deliveryAreasEn}, usually ${s.deliveryTimeEn}. Minimum order $${s.minDeliveryOrder} BZD.`,
+      payment: `💵 ${s.paymentEn}`,
+      location: `📍 We're based in ${s.deliveryAreasEn}. For exact directions, best to give us a call!`,
     },
     es: {
-      hours: `Abrimos ${s.hoursEs}.`,
-      deliveryFee: `La entrega cuesta $${s.deliveryFee} BZD dentro de ${s.deliveryAreasEs}, normalmente ${s.deliveryTimeEs}. Pedido mínimo para entrega: $${s.minDeliveryOrder} BZD.`,
-      deliveryGeneral: `¡Sí, hacemos entregas! $${s.deliveryFee} BZD dentro de ${s.deliveryAreasEs}, normalmente ${s.deliveryTimeEs}. Pedido mínimo $${s.minDeliveryOrder} BZD.`,
-      payment: s.paymentEs,
-      location: `Estamos en ${s.deliveryAreasEs}. Para direcciones exactas, mejor llámanos.`,
+      hours: `🕐 ¡Abrimos ${s.hoursEs}!`,
+      deliveryFee: `🏍️ La entrega cuesta $${s.deliveryFee} BZD dentro de ${s.deliveryAreasEs}, normalmente ${s.deliveryTimeEs}. Pedido mínimo para entrega: $${s.minDeliveryOrder} BZD.`,
+      deliveryGeneral: `🏍️ ¡Sí, hacemos entregas! $${s.deliveryFee} BZD dentro de ${s.deliveryAreasEs}, normalmente ${s.deliveryTimeEs}. Pedido mínimo $${s.minDeliveryOrder} BZD.`,
+      payment: `💵 ${s.paymentEs}`,
+      location: `📍 Estamos en ${s.deliveryAreasEs}. Para direcciones exactas, ¡mejor llámanos!`,
     },
   };
   return (answers[lang] && answers[lang][key]) || null;
