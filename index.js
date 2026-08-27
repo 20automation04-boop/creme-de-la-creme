@@ -1136,6 +1136,51 @@ async function saveCustomerProfile(from, fields) {
 let lastKnownStatus = new Map();
 let statusPollingInitialized = false;
 
+// Sends the customer their status update and records it, so whichever path
+// notices a status change first wins and the other won't repeat it.
+//
+// Two callers: pollOrderStatus (which catches manual Manager-sheet edits on
+// its 60s cycle) and the /kitchen dashboard (which calls this the instant
+// staff tap a button). The dashboard MUST call this rather than leaving it
+// to the poller: staff routinely move an order Preparing -> Out for
+// Delivery -> Completed inside a single 60s window, and the poller only ever
+// sees whatever the status happens to be when it next looks. Every
+// intermediate status in between was silently dropped — verified in
+// production, where real "Out for Delivery" messages for orders #5780 and
+// #7586 were never sent because Completed was tapped before the next poll.
+//
+// Marking the status BEFORE awaiting the send is deliberate: it means a slow
+// or failed send can't let a concurrent poll fire the same message twice.
+async function notifyStatusChange({ orderNumber, timestamp, status, language, phoneCell }) {
+  const key = `${orderNumber}|${timestamp}`;
+  if (lastKnownStatus.get(key) === status) return false;
+  lastKnownStatus.set(key, status); // record even when we don't message
+
+  const lang = language === 'es' ? 'es' : 'en';
+  const buildMessage = STATUS_MESSAGES[lang][status];
+  const phone = String(phoneCell || '').replace(/^\+/, ''); // Chakra/Meta wants bare digits
+
+  if (!buildMessage) {
+    // Status text doesn't exactly match one of STATUS_MESSAGES's keys
+    // (case-sensitive) — likely a typo in the sheet's status column, or
+    // it's free-text rather than a locked dropdown. Worth knowing about
+    // even though there's nothing to send: the customer silently never
+    // gets notified otherwise, with no other signal that anything's off.
+    console.warn(`Order #${orderNumber}: status changed to "${status}" but no message template matches it (check for a typo/case mismatch in the Manager sheet) — customer not notified.`);
+    return false;
+  }
+  if (!phone) return false; // no phone on file for this order — expected for older rows
+
+  try {
+    await sendWhatsAppMessage(phone, buildMessage(orderNumber));
+    console.log(`Status update sent for order #${orderNumber}: ${status}`);
+    return true;
+  } catch (sendErr) {
+    console.error(`Failed to send status update for order #${orderNumber}:`, sendErr.message || sendErr);
+    return false;
+  }
+}
+
 async function pollOrderStatus() {
   if (!process.env.GOOGLE_SHEETS_ID || !CHAKRA_API_KEY) return;
   try {
@@ -1174,32 +1219,8 @@ async function pollOrderStatus() {
       // too). Must match the pre-seed logOrderToSheets writes right after
       // creating a new order — see the comment there.
       const key = `${orderNumber}|${timestamp}`;
-      const previous = lastKnownStatus.get(key);
-
-      if (previous === status) continue;
-      lastKnownStatus.set(key, status); // always update, even if we don't message
-
-      const lang = language === 'es' ? 'es' : 'en';
-      const buildMessage = STATUS_MESSAGES[lang][status];
-      const phone = (phoneCell || '').replace(/^\+/, ''); // strip '+' — Chakra/Meta wants bare digits
-
-      if (!buildMessage) {
-        // Status text doesn't exactly match one of STATUS_MESSAGES's keys
-        // (case-sensitive) — likely a typo in the sheet's status column, or
-        // it's free-text rather than a locked dropdown. Worth knowing about
-        // even though there's nothing to send: the customer silently never
-        // gets notified otherwise, with no other signal that anything's off.
-        console.warn(`Order #${orderNumber}: status changed to "${status}" but no message template matches it (check for a typo/case mismatch in the Manager sheet) — customer not notified.`);
-        continue;
-      }
-      if (!phone) continue; // no phone on file for this order — nothing to notify, this is expected
-
-      try {
-        await sendWhatsAppMessage(phone, buildMessage(orderNumber));
-        console.log(`Status update sent for order #${orderNumber}: ${status}`);
-      } catch (sendErr) {
-        console.error(`Failed to send status update for order #${orderNumber}:`, sendErr.message || sendErr);
-      }
+      if (lastKnownStatus.get(key) === status) continue;
+      await notifyStatusChange({ orderNumber, timestamp, status, language, phoneCell });
     }
   } catch (err) {
     console.error('Order status poll failed:', err.message || err);
@@ -3664,9 +3685,19 @@ app.post('/kitchen/status', async (req, res) => {
     });
     managerRowsCache = null;
     console.log(`Kitchen dashboard: order #${orderNumber} -> ${status}`);
-    // No customer message is sent from here on purpose — pollOrderStatus
-    // sees the sheet change on its next pass and sends it, so the dashboard
-    // and a manual sheet edit behave identically.
+    // Notify immediately rather than waiting for pollOrderStatus's 60s
+    // cycle. Staff commonly tap Preparing -> Out for Delivery -> Completed
+    // within one window, and the poller only sees the final value — every
+    // status in between used to be silently dropped. notifyStatusChange
+    // records the status before sending, so the next poll won't repeat it.
+    // Awaited so a failure surfaces to the tablet instead of vanishing.
+    await notifyStatusChange({
+      orderNumber: String(orderNumber),
+      timestamp: current[1],
+      status,
+      language: current[5],
+      phoneCell: current[6],
+    });
     res.json({ ok: true });
   } catch (err) {
     console.error('Kitchen dashboard status update failed:', err.message || err);
@@ -3890,4 +3921,4 @@ if (require.main === module) {
 
 // For the replay-test harness (test/replay.test.js) only — production never
 // requires this file as a module, so these exports are inert otherwise.
-module.exports = { app, processWhatsAppMessage, dryRunSent, sessions, lastOrders, savedCarts, cartTotal, OWNER_NUMBERS, DRIVER_NUMBERS, soldOutIds, sweepIdleSessions, replySummaryText, MENU, applyMenuSheetRows, resetMenuSheetTrackingForTests };
+module.exports = { app, processWhatsAppMessage, dryRunSent, sessions, lastOrders, savedCarts, cartTotal, OWNER_NUMBERS, DRIVER_NUMBERS, soldOutIds, sweepIdleSessions, replySummaryText, MENU, applyMenuSheetRows, resetMenuSheetTrackingForTests, notifyStatusChange };
