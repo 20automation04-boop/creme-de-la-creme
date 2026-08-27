@@ -7,6 +7,6 @@
     { "in": "1", "expectStep": "quantity" },
     { "in": "1", "expectStep": "notes" },
     { "in": "0", "expectStep": "item", "expectCartLength": 1 },
-    { "in": "cancel", "expectStep": "language", "expectCartLength": 0, "expectReplyContains": "cancelled" }
+    { "in": "cancel", "expectStep": "menu", "expectCartLength": 0, "expectReplyContains": "cancelled" }
   ]
 }

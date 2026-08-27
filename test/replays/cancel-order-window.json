@@ -9,8 +9,7 @@
     { "in": "0", "expectStep": "item" },
     { "in": "done", "expectStep": "mode" },
     { "in": "pickup", "expectStep": "confirm" },
-    { "in": "yes", "expectStep": "language", "expectReplyContains": "confirmed!" },
-    { "in": "1", "expectStep": "menu" },
+    { "in": "yes", "expectStep": "menu", "expectReplyContains": "confirmed!" },
     { "in": "cancel order", "expectReplyContains": "couldn't find that order" }
   ]
 }

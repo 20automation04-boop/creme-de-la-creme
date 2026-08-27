@@ -1,0 +1,18 @@
+{
+  "name": "repeat-command-works-from-item-step-not-just-menu",
+  "from": "19990000027",
+  "turns": [
+    { "in": "1", "expectStep": "menu" },
+    { "in": "1", "expectStep": "item" },
+    { "in": "1", "expectStep": "quantity" },
+    { "in": "2", "expectStep": "notes" },
+    { "buttonId": "none", "expectStep": "item", "expectCartLength": 1 },
+
+    { "in": "done", "expectStep": "mode" },
+    { "buttonId": "pickup", "expectStep": "confirm" },
+    { "in": "yes", "expectStep": "menu", "expectCartLength": 0 },
+
+    { "in": "1", "expectStep": "item" },
+    { "in": "repeat", "expectStep": "menu", "expectCartLength": 1 }
+  ]
+}

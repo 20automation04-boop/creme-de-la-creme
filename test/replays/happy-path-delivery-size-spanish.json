@@ -11,6 +11,6 @@
     { "in": "listo", "expectStep": "mode" },
     { "in": "entrega", "expectStep": "address" },
     { "in": "123 Calle Principal", "expectStep": "confirm" },
-    { "in": "si", "expectStep": "language", "expectReplyContains": "confirmada" }
+    { "in": "si", "expectStep": "menu", "expectReplyContains": "confirmada" }
   ]
 }

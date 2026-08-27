@@ -1519,6 +1519,23 @@ const lastOrders = {};
 // restart/no-persistence tradeoff as `sessions` and `lastOrders`.
 const savedCarts = {};
 
+// Fresh session that keeps the one thing a customer already told us and
+// shouldn't have to repeat: their language. Used everywhere a session is
+// reset mid-relationship (order confirmed, order cancelled, 'cancel'
+// command) — previously those three sites called newSession() directly and
+// silently dumped a returning customer back onto the English/Español picker
+// right after they'd finished ordering. The idle-expiry path already
+// preserved language by hand; this makes that the shared rule.
+function resetSessionKeepingLanguage(from) {
+  const preservedLanguage = sessions[from] && sessions[from].language;
+  sessions[from] = newSession();
+  if (preservedLanguage) {
+    sessions[from].language = preservedLanguage;
+    sessions[from].step = 'menu';
+  }
+  return sessions[from];
+}
+
 function newSession() {
   return {
     step: 'language',
@@ -2441,6 +2458,46 @@ function findAmbiguousItemNames(rawMsg) {
 // apologies (if any) followed by the "Added ✅" cart update (if anything was
 // actually added). The caller appends whatever follow-up text fits their
 // step (re-ask a question, show the menu, show the category again, etc.).
+// Refills the cart from this customer's last order, honouring sold-out items
+// and the cart-line cap. Shared by the *repeat*/*repetir* command at both the
+// 'menu' and 'item' steps (and the "Reorder 🔁" button, which sends the same
+// id) so the two can't drift apart.
+function buildRepeatReply(from, session, lang) {
+  const t = TXT[lang];
+  const last = lastOrders[from];
+  if (!last || last.cart.length === 0) {
+    return [t.noPreviousOrder, ...categoryListMessages(lang)];
+  }
+
+  const addedLines = [];
+  const soldOutLines = [];
+  let repeatCapped = false;
+  last.cart.forEach(item => {
+    if (repeatCapped) return;
+    if (item.categoryId != null && item.itemIndex != null && isItemSoldOut(item.categoryId, item.itemIndex)) {
+      soldOutLines.push(t.soldOutItem(item.name, suggestSubstitute(item.categoryId, item.itemIndex)));
+      return;
+    }
+    if (!addToCart(session.cart, item.name, item.price, item.qty, item.note, item.categoryId, item.itemIndex)) {
+      repeatCapped = true;
+      return;
+    }
+    const noteStr = item.note ? ` [${item.note}]` : '';
+    addedLines.push(`${item.name}${noteStr} x${item.qty} - $${(item.price * item.qty).toFixed(2)}`);
+  });
+
+  const bits = [];
+  if (soldOutLines.length > 0) bits.push(soldOutLines.join('\n'));
+  if (addedLines.length > 0) bits.push(t.added(addedLines.join('\n'), cartTotal(session.cart).toFixed(2)));
+  if (repeatCapped) bits.push(t.cartFull);
+
+  return [
+    bits.length > 0 ? bits.join('\n\n') : t.noPreviousOrder,
+    confirmNudgeMessage(lang),
+    ...categoryListMessages(lang),
+  ];
+}
+
 function orderResultText(result, session, lang) {
   const t = TXT[lang];
   const bits = [];
@@ -2655,6 +2712,14 @@ async function processWhatsAppMessage(message, res) {
       ));
     }
 
+    // Unicode-normalize before ANY comparison. Every accented literal in this
+    // file ('atrás', 'menú', 'sí', 'español') is precomposed (NFC), but iOS/
+    // Android keyboards and voice transcription can emit the decomposed (NFD)
+    // form — visually identical, different bytes, so a correctly-typed
+    // "atrás" would match nothing and fall through to an AI call plus "no
+    // entendí eso". Normalizing rawMsg itself (not just `msg`) also keeps
+    // stored notes/addresses in one consistent form.
+    rawMsg = rawMsg.normalize('NFC');
     const msg = rawMsg.toLowerCase();
     const isFreeform = message.type === 'text' || message.type === 'audio'; // structured button/list taps don't carry frustration signals the same way
 
@@ -2680,7 +2745,7 @@ async function processWhatsAppMessage(message, res) {
     if (msg === 'cancel' || msg === 'cancelar') {
       const lang = session.language || 'en';
       delete savedCarts[from];
-      sessions[from] = newSession();
+      resetSessionKeepingLanguage(from);
       return sendReply(res, from, lang === 'es'
         ? 'Orden cancelada ❌. Escribe *menú* para empezar de nuevo.'
         : 'Order cancelled ❌. Type *menu* to start over.');
@@ -2948,38 +3013,7 @@ async function processWhatsAppMessage(message, res) {
         } else if (msg === 'cart' || msg === 'carrito') {
           reply = cartText(session.cart, lang);
         } else if (msg === 'repeat' || msg === 'repetir') {
-          const last = lastOrders[from];
-          if (!last || last.cart.length === 0) {
-            reply = [t.noPreviousOrder, ...categoryListMessages(lang)];
-          } else {
-            const addedLines = [];
-            const soldOutLines = [];
-            let repeatCapped = false;
-            last.cart.forEach(item => {
-              if (repeatCapped) return;
-              if (item.categoryId != null && item.itemIndex != null && isItemSoldOut(item.categoryId, item.itemIndex)) {
-                soldOutLines.push(t.soldOutItem(item.name, suggestSubstitute(item.categoryId, item.itemIndex)));
-                return;
-              }
-              if (!addToCart(session.cart, item.name, item.price, item.qty, item.note, item.categoryId, item.itemIndex)) {
-                repeatCapped = true;
-                return;
-              }
-              const noteStr = item.note ? ` [${item.note}]` : '';
-              addedLines.push(`${item.name}${noteStr} x${item.qty} - $${(item.price * item.qty).toFixed(2)}`);
-            });
-
-            const bits = [];
-            if (soldOutLines.length > 0) bits.push(soldOutLines.join('\n'));
-            if (addedLines.length > 0) bits.push(t.added(addedLines.join('\n'), cartTotal(session.cart).toFixed(2)));
-            if (repeatCapped) bits.push(t.cartFull);
-
-            reply = [
-              bits.length > 0 ? bits.join('\n\n') : t.noPreviousOrder,
-              confirmNudgeMessage(lang),
-              ...categoryListMessages(lang),
-            ];
-          }
+          reply = buildRepeatReply(from, session, lang);
         } else if (msg === 'done' || msg === 'listo' || msg === 'checkout') {
           reply = tryCheckout(session, lang, categoryListMessages(lang));
         } else {
@@ -3031,6 +3065,19 @@ async function processWhatsAppMessage(message, res) {
 
         if (msg === 'done' || msg === 'listo' || msg === 'checkout') {
           reply = tryCheckout(session, lang, [categoryItemsListMessage(cat, lang)]);
+          break;
+        }
+
+        // The help glossary advertises *repeat*/*repetir* unconditionally,
+        // but it was only wired into the 'menu' case — and after every add
+        // the customer is parked HERE, in 'item', which is exactly where
+        // they'd reach for it. Shares buildRepeatReply with the 'menu' case
+        // rather than duplicating its sold-out/cart-cap handling. (Not a
+        // recursive re-dispatch: that would re-run the dedup/transcript
+        // preamble and drop the message as an id it had already seen.)
+        if (msg === 'repeat' || msg === 'repetir') {
+          session.step = 'menu';
+          reply = buildRepeatReply(from, session, lang);
           break;
         }
 
@@ -3154,6 +3201,21 @@ async function processWhatsAppMessage(message, res) {
           break;
         }
 
+        // Stale-tap guard, same family as the 'notes'/'address' steps below.
+        // Nothing is corrupted here (a non-numeric id just fails the check
+        // below), but without this a tapped id burned a real Gemini call via
+        // attemptFreeOrder before landing on "that's not a valid quantity".
+        if (message.type === 'interactive' && !/^\d+$/.test(msg)) {
+          const pending = session.pendingItem;
+          const pendingSize = session.pendingSize;
+          reply = t.askQty(
+            pendingSize ? `${pending.name} (${pendingSize.label})` : pending.name,
+            (pendingSize ? pendingSize.price : pending.price).toFixed(2),
+            MAX_QTY
+          );
+          break;
+        }
+
         const qty = parseInt(msg, 10);
         if (!Number.isInteger(qty) || qty < 1 || qty > MAX_QTY || !/^\d+$/.test(msg)) {
           // Not a valid quantity — check for a quick FAQ match first (see
@@ -3201,7 +3263,22 @@ async function processWhatsAppMessage(message, res) {
         }
 
         const noNoteWords = ['none', 'no', 'ninguno', 'ninguna', 'nada', 'n/a', 'na', '0'];
-        const note = noNoteWords.includes(msg) ? '' : rawMsg.trim().slice(0, 60);
+        const isNoNote = noNoteWords.includes(msg);
+
+        // A button/list TAP can never BE this item's note — the customer
+        // typed nothing. WhatsApp never expires old interactive messages, so
+        // any other id reaching here is a stale tap on an earlier message
+        // (e.g. the "Done ✅" button from the add-more nudge, or a mode/
+        // confirm button from a previous order). Without this guard that id
+        // was silently stored as the note text and printed on the kitchen
+        // ticket — a real "Vanilla Bean [done] x2" was reproduced this way.
+        // Free-typed text is untouched: it arrives as message.type 'text'.
+        if (!isNoNote && message.type === 'interactive') {
+          reply = notesButtonsMessage(lang);
+          break;
+        }
+
+        const note = isNoNote ? '' : rawMsg.trim().slice(0, 60);
 
         const added = addToCart(session.cart, name, price, qty, note, session.pendingCategoryId, session.pendingItemIndex);
         // Land back on this SAME category's item list (not the top-level
@@ -3281,6 +3358,17 @@ async function processWhatsAppMessage(message, res) {
         }
         if (msg === 'new_address') {
           reply = t.askAddress(SHOP_INFO.deliveryFee); // stay in 'address', re-ask plainly
+          break;
+        }
+        // Same stale-tap guard as the 'notes' step above, and higher stakes
+        // here: an unhandled button id used to become the literal delivery
+        // address ("done"), advance straight to confirm, AND get written
+        // through to the customer's saved profile — so a real driver could
+        // be dispatched to "done" and the bad address would be re-offered on
+        // every future order. Only 'text'/'audio' messages are real answers
+        // to "what's the address?".
+        if (message.type === 'interactive') {
+          reply = savedAddr ? savedAddressButtonsMessage(savedAddr, lang) : t.askAddress(SHOP_INFO.deliveryFee);
           break;
         }
         // Capped, same reasoning as the per-item note cap above — this text
@@ -3370,9 +3458,11 @@ async function processWhatsAppMessage(message, res) {
           // its own reference, untouched by whatever the next message does.
           // If this reset is ever changed to mutate in place (e.g.
           // Object.assign(session, newSession())), that safety goes away.
-          sessions[from] = newSession();
+          // (resetSessionKeepingLanguage assigns a NEW object before setting
+          // the preserved language on it, so it upholds that contract.)
+          resetSessionKeepingLanguage(from);
         } else if (msg === 'no' || msg === 'cancel' || msg === 'cancelar') {
-          sessions[from] = newSession();
+          resetSessionKeepingLanguage(from);
           reply = t.orderCancelled;
         } else {
           // Last chance to add something before confirming — cart isn't locked
