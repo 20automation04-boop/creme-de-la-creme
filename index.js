@@ -1966,6 +1966,203 @@ function categoryListMessages(lang) {
   ];
 }
 
+// ---- FLAVOR / CRAVING RECOMMENDATIONS ----
+// "anything mango?", "I want something cheesy", "algo de chocolate" — a
+// craving rather than a specific item. Matches loosely against the words in
+// menu item names so it keeps working as the menu changes (including items
+// added through the Availability sheet), instead of hardcoding a flavor list.
+//
+// Voice notes get this for free: a transcript becomes rawMsg before any of
+// this runs, so speaking "do you have anything mango" behaves like typing it.
+// NOTE: no trailing \b on these. The Spanish alternatives are deliberately
+// word STEMS ("recomiend" covers recomiendas/recomiendan/recomiende), and a
+// trailing \b would reject exactly those — after "recomiend" the next
+// character is a letter, so there's no boundary there. Cost a real miss on
+// "qué me recomiendas" before it was caught.
+const CRAVING_RE = /\b(something|anything|craving|crave|mood for|in the mood|recommend|suggest|what.*(have|got)|any\b.*\?|options?)|\b(algo|antojo|antoja|recomiend|recomend|recomendaci|sugerenc|sugier|opcion|tienen)/i;
+
+// A recommendation request with NO flavor attached — "what do you recommend?",
+// "what's good?", "surprise me", "no sé qué pedir". Kept separate from
+// CRAVING_RE because these need best-sellers rather than a keyword match.
+// Mirrored in both languages, including the accent-less spellings people
+// actually type on a phone ("que me recomiendas", "no se que pedir").
+// Same no-trailing-\b rule as CRAVING_RE above — these are stems too.
+const GENERAL_RECOMMEND_RE = /\b(what('?s| is| do you)?\s*(you\s*)?(recommend|suggest|good|best|popular|nice|tasty)|recommend me|suggest me|surprise me|your best|most popular|best ?seller|what should i (get|order|try)|help me (choose|decide|pick)|don'?t know what|not sure what|any ?recommendation)|\b(qu[eé]\s*(me\s*)?(recomiend|recomend|sugier)|recomi[eé]ndame|sug[ieé]reme|sorpr[eé]ndeme|lo m[aá]s (pedido|popular|vendido)|el mejor|los mejores|qu[eé] est[aá] (bueno|rico)|no s[eé] qu[eé] (pedir|quiero|escoger|ordenar)|ay[uú]dame a (elegir|escoger|decidir)|qu[eé] me sugier)/i;
+
+// Words too generic to be a useful craving signal — they'd match half the
+// menu ("large coffee" shouldn't recommend every coffee).
+const CRAVING_STOPWORDS = new Set([
+  'with', 'and', 'the', 'our', 'for', 'you', 'have', 'want', 'like', 'some',
+  'something', 'anything', 'please', 'large', 'regular', 'small', 'order',
+  'menu', 'this', 'that', 'what', 'your', 'from', 'give', 'need', 'about',
+  'quiero', 'algo', 'tienen', 'tiene', 'para', 'grande', 'menu', 'menú',
+  'porfavor', 'favor', 'dame', 'quisiera', 'pero', 'como', 'cual', 'cuál',
+]);
+
+// Loose stem match: "cheesy"/"cheese" share "chees", "berries"/"berry" share
+// "berr". A shared 4-character prefix is the cheapest rule that catches the
+// plural/adjective forms customers actually type without matching unrelated
+// words.
+function cravingWordsMatch(a, b) {
+  if (a === b) return true;
+  const n = Math.min(a.length, b.length, 5);
+  if (n < 4) return false;
+  return a.slice(0, n) === b.slice(0, n);
+}
+
+// The menu is written in English, so a Spanish craving ("algo de fresa")
+// would never match a word in it without this. Only flavors/ingredients that
+// actually appear on this menu are listed — there's no value in translating
+// words we could never match anyway.
+const FLAVOR_SYNONYMS = {
+  fresa: 'strawberry', fresas: 'strawberry',
+  chocolate: 'chocolate', vainilla: 'vanilla',
+  cafe: 'coffee', café: 'coffee',
+  pina: 'pineapple', piña: 'pineapple',
+  mora: 'blackberry', moras: 'blackberry',
+  frambuesa: 'raspberry', frambuesas: 'raspberry',
+  arandano: 'blueberry', arándano: 'blueberry', arandanos: 'blueberry', arándanos: 'blueberry',
+  platano: 'banana', plátano: 'banana', banano: 'banana',
+  menta: 'mint', mani: 'peanut', maní: 'peanut', cacahuate: 'peanut',
+  galleta: 'cookie', galletas: 'cookie',
+  queso: 'cheese', quesos: 'cheese',
+  pollo: 'chicken', carne: 'steak', res: 'steak',
+  cerdo: 'pork', jamon: 'ham', jamón: 'ham',
+  limon: 'lemon', limón: 'lemon', miel: 'honey',
+  fruta: 'fruit', frutas: 'fruit',
+  mango: 'mango', papaya: 'papaya', kiwi: 'kiwi',
+  helado: 'frozen', frio: 'frozen', frío: 'frozen',
+  te: 'tea', té: 'tea', batido: 'smoothie',
+  sandwich: 'sandwich', emparedado: 'sandwich',
+  picante: 'chili', chile: 'chili',
+};
+
+function significantWords(text) {
+  const words = String(text || '')
+    .toLowerCase()
+    .replace(/[^a-záéíóúñü\s]/gi, ' ')
+    .split(/\s+/)
+    .filter(w => w.length >= 3 && !CRAVING_STOPWORDS.has(w));
+
+  // Keep the original AND its English equivalent — a message mixing both
+  // languages (common here) still matches either way.
+  const expanded = [];
+  for (const w of words) {
+    if (w.length >= 4) expanded.push(w);
+    const synonym = FLAVOR_SYNONYMS[w];
+    if (synonym) expanded.push(synonym);
+  }
+  return expanded;
+}
+
+// Returns in-stock menu items whose name shares a significant word with the
+// message. Capped — a WhatsApp list can hold 10 rows, and a wall of options
+// is worse than a short suggestion anyway.
+function findItemsByCraving(rawMsg, limit = 8) {
+  const words = significantWords(rawMsg);
+  if (words.length === 0) return [];
+
+  const hits = [];
+  MENU.forEach(cat => {
+    cat.items.forEach((item, i) => {
+      const itemIndex = i + 1;
+      if (isItemSoldOut(cat.id, itemIndex)) return;
+      const nameWords = significantWords(item.name);
+      // The category name counts too, so "cheesy" can surface Quesadillas
+      // and "smoothie" the whole Fruity Smoothie section.
+      const catWords = significantWords(cat.category);
+      const matched = words.some(w =>
+        nameWords.some(nw => cravingWordsMatch(w, nw)) ||
+        catWords.some(cw => cravingWordsMatch(w, cw))
+      );
+      if (matched) hits.push({ cat, item, itemIndex });
+    });
+  });
+  return hits.slice(0, limit);
+}
+
+// "what do you recommend?", "what's good?", "surprise me" — a recommendation
+// request with no flavor attached, so there's nothing to keyword-match on.
+// Answer with what people ACTUALLY order most (from the Manager sheet), and
+// fall back to a spread across categories when there's no history yet.
+async function findRecommendedItems(limit = 6) {
+  const byName = new Map();
+  MENU.forEach(cat => {
+    cat.items.forEach((item, i) => {
+      const itemIndex = i + 1;
+      if (isItemSoldOut(cat.id, itemIndex)) return;
+      // Sheet rows record sized items as "Papaya (Large)" — key on the bare
+      // name so both sizes count toward the same item.
+      byName.set(item.name.toLowerCase(), { cat, item, itemIndex });
+    });
+  });
+
+  try {
+    const { topItems } = await getOrderStats();
+    const hits = [];
+    for (const [name] of topItems) {
+      const bare = String(name).replace(/\s*\([^)]*\)\s*$/, '').trim().toLowerCase();
+      const found = byName.get(bare);
+      if (found && !hits.includes(found)) hits.push(found);
+      if (hits.length >= limit) break;
+    }
+    if (hits.length > 0) return { hits, fromHistory: true };
+  } catch (err) {
+    // Never let a Sheets hiccup turn a recommendation into an error reply —
+    // the category spread below is a perfectly good answer on its own.
+    console.error('Recommendation stats lookup failed, using menu spread:', err.message || err);
+  }
+
+  // No history (or Sheets unavailable): one item from each of the first few
+  // categories, so the customer still sees a varied, useful sample.
+  const spread = [];
+  for (const cat of MENU) {
+    const idx = cat.items.findIndex((_, i) => !isItemSoldOut(cat.id, i + 1));
+    if (idx !== -1) spread.push({ cat, item: cat.items[idx], itemIndex: idx + 1 });
+    if (spread.length >= limit) break;
+  }
+  return { hits: spread, fromHistory: false };
+}
+
+function recommendationMessage(hits, lang, opts = {}) {
+  const rows = hits.map(({ cat, item, itemIndex }) => {
+    const priceText = item.sizes
+      ? `$${item.sizes[0].price.toFixed(2)}–$${item.sizes[item.sizes.length - 1].price.toFixed(2)}`
+      : `$${item.price.toFixed(2)}`;
+    const { title, full } = truncateForRow(item.name);
+    const description = ((full ? `${full} — ` : '') + priceText).slice(0, LIST_ROW_DESC_MAX);
+    // Same self-describing id the category lists use, so a tap routes through
+    // the existing interactive handler — no new routing logic, and a stale
+    // tap still resolves to the right item.
+    return { id: `item:${cat.id}:${itemIndex}`, title, description };
+  });
+
+  const body = opts.popular
+    ? (lang === 'es'
+      ? '⭐ Estos son los favoritos de nuestros clientes:'
+      : '⭐ These are our customers\' favorites:')
+    : opts.spread
+      ? (lang === 'es'
+        ? '😋 Aquí tienes un poco de todo — ¿algo te llama la atención?'
+        : '😋 Here\'s a bit of everything — anything catch your eye?')
+      : (lang === 'es'
+        ? '😋 Esto es lo que tenemos que te podría gustar:'
+        : '😋 Here\'s what we\'ve got that you might like:');
+
+  const fallback = body + '\n' + hits
+    .map(({ cat, item, itemIndex }) => `${cat.id}.${itemIndex} ${item.name}`)
+    .join('\n');
+
+  return {
+    list: {
+      body,
+      buttonLabel: lang === 'es' ? 'Ver opciones' : 'See options',
+      sections: [{ rows }],
+    },
+    fallback,
+  };
+}
+
 function categoryItemsListMessage(cat, lang) {
   const soldOutNames = [];
   const rows = [];
@@ -3018,6 +3215,29 @@ async function processWhatsAppMessage(message, res) {
             break;
           }
 
+          // A craving or recommendation request is a browsing question, not
+          // an order — answer it BEFORE the AI order-parser gets a chance to
+          // guess a single item and silently drop it in the cart. Only fires
+          // on phrasing that actually signals one, so "2 mango smoothies"
+          // still orders normally. Also cheaper and more reliable than the
+          // AI path: it works even when Gemini is rate-limited or down.
+          if (CRAVING_RE.test(rawMsg) || GENERAL_RECOMMEND_RE.test(rawMsg)) {
+            // A named flavor wins — "what do you recommend that's mango"
+            // should answer with mango, not with best-sellers.
+            const hits = findItemsByCraving(rawMsg);
+            if (hits.length > 0) {
+              reply = recommendationMessage(hits, lang);
+              break;
+            }
+            if (GENERAL_RECOMMEND_RE.test(rawMsg)) {
+              const { hits: recs, fromHistory } = await findRecommendedItems();
+              if (recs.length > 0) {
+                reply = recommendationMessage(recs, lang, { popular: fromHistory, spread: !fromHistory });
+                break;
+              }
+            }
+          }
+
           const orderResult = await attemptFreeOrder(rawMsg, session);
 
           if (orderResult.added.length > 0 || orderResult.soldOut.length > 0) {
@@ -3033,8 +3253,17 @@ async function processWhatsAppMessage(message, res) {
             // attemptFreeOrder already got from the same call.
             reply = `${orderResult.answer}\n\n${t.humanHelp(SHOP_INFO.phone)}`;
           } else {
-            parseFailed = true;
-            reply = `${t.notUnderstood}\n\n${t.humanHelp(SHOP_INFO.phone)}`;
+            // Last chance before giving up: if anything on the menu relates
+            // to what they said, suggest it rather than replying "I didn't
+            // understand". Someone who typed a flavor we couldn't parse into
+            // an order is still telling us what they're in the mood for.
+            const hits = findItemsByCraving(rawMsg);
+            if (hits.length > 0) {
+              reply = recommendationMessage(hits, lang);
+            } else {
+              parseFailed = true;
+              reply = `${t.notUnderstood}\n\n${t.humanHelp(SHOP_INFO.phone)}`;
+            }
           }
         }
         break;
