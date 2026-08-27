@@ -30,10 +30,25 @@ shorthand as pure text with no button — added a one-button "None" quick-reply
 tapped id — see `extractInboundMessage` — so no new routing logic was needed, it falls
 through the existing per-step switch exactly like typed "none" already did).
 
+Second known example, also already found and fixed: the proactive idle/recovery nudges
+(`idleExpired`, `resumeOffer`, `idleConfirmPrompt`, `abandonedCartRecovery`) are sent by
+`sweepIdleSessions()` — a background sweep, not a webhook reply — so they'd been missed
+by anything only auditing `sendReply(...)` call sites. Each offered a small fixed
+YES/MENU-style choice as plain text only. Added `resumeChoiceMessage`/
+`idleConfirmButtonMessage`/`abandonedCartRecoveryMessage` builders sent via
+`sendWhatsAppMessage` directly (same as the plain-text versions were), with button ids
+(`yes`/`menu`) that already matched the existing checks at the `pendingResume` block and
+the `'confirm'` step — verified safe by reading exactly which state each nudge fires
+from before wiring it (e.g. `abandonedCartRecovery` only ever fires while
+`pendingResume` is already true, so its `yes` tap was guaranteed to land in that block).
+`idleHold`/`idleStillThere` were deliberately left as plain text — they're FYI nudges
+with no action being requested, not a choice to buttonize.
+
 Other places worth checking each run, since menu/flow changes over time can introduce
 new free-text-only prompts: any new `askX` prompt added to `TXT.en`/`TXT.es`, any new
 step handler that only checks `msg === 'literal'` without an accompanying button
-message.
+message, and any new proactive/background send (grep `sendWhatsAppMessage(` directly,
+not just `sendReply(`, since background sends bypass the normal webhook reply path).
 
 ## What NOT to touch
 

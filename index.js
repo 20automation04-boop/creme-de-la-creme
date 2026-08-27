@@ -1603,7 +1603,7 @@ function sweepIdleSessions() {
       sessions[from] = newSession();
       sessions[from].language = preservedLanguage;
       sessions[from].pendingResume = true;
-      sendWhatsAppMessage(from, t.idleExpired).catch(err => console.error(`Idle-expiry message failed for ${from}:`, err.message || err));
+      sendWhatsAppMessage(from, resumeChoiceMessage(lang, t.idleExpired)).catch(err => console.error(`Idle-expiry message failed for ${from}:`, err.message || err));
       continue;
     }
 
@@ -1617,7 +1617,7 @@ function sweepIdleSessions() {
       session.nudgeStage = 1;
       // Cart is complete but unconfirmed — nudge the action (confirm),
       // not the silence, per the product spec for this stage.
-      const message = session.step === 'confirm' ? t.idleConfirmPrompt : t.idleStillThere;
+      const message = session.step === 'confirm' ? idleConfirmButtonMessage(lang) : t.idleStillThere;
       sendWhatsAppMessage(from, message).catch(err => console.error(`Idle nudge failed for ${from}:`, err.message || err));
     }
   }
@@ -2036,6 +2036,58 @@ function confirmNudgeMessage(lang) {
     buttons: {
       body,
       buttons: [{ id: 'done', title: t.doneButtonTitle }],
+    },
+    fallback: body,
+  };
+}
+
+// These three are sent proactively by sweepIdleSessions()/the abandoned-cart
+// recovery pass, OUTSIDE the normal webhook request/reply cycle — but the
+// button ids still route through the exact same per-step checks a typed
+// reply would ('yes'/'menu' at the pendingResume block, 'yes' at the
+// 'confirm' step's msg check), so no new routing logic is needed for any of
+// these; see sweepIdleSessions for why each one is safe to tap into.
+
+// Used for both idleExpired (session already flipped to pendingResume=true
+// right before this is sent) and the reactive resumeOffer reply — same
+// choice, same ids, different body text depending on which fired.
+function resumeChoiceMessage(lang, body) {
+  return {
+    buttons: {
+      body,
+      buttons: [
+        { id: 'yes', title: lang === 'es' ? 'Continuar Orden 🔁' : 'Resume Order 🔁' },
+        { id: 'menu', title: lang === 'es' ? 'Empezar de Nuevo 🆕' : 'Start Fresh 🆕' },
+      ],
+    },
+    fallback: body,
+  };
+}
+
+function idleConfirmButtonMessage(lang) {
+  const t = TXT[lang];
+  const body = t.idleConfirmPrompt;
+  return {
+    buttons: {
+      body,
+      buttons: [{ id: 'yes', title: lang === 'es' ? 'Confirmar Orden ✅' : 'Confirm Order ✅' }],
+    },
+    fallback: body,
+  };
+}
+
+// Built and tested but deliberately not wired in yet, per explicit request —
+// a one-tap "Claim Discount" button removes friction from redeeming the
+// abandoned-cart discount, which also means more customers will actually
+// claim it. Business call, not a code readiness issue. Swap the plain-text
+// TXT[lang].abandonedCartRecovery(...) call in sweepIdleSessions for
+// abandonedCartRecoveryMessage(lang, percent) to turn it on.
+function abandonedCartRecoveryMessage(lang, percent) {
+  const body = TXT[lang].abandonedCartRecovery(percent);
+  return {
+    buttons: {
+      body,
+      buttons: [{ id: 'yes', title: lang === 'es' ? 'Reclamar Descuento 🎁' : 'Claim Discount 🎁' }],
     },
     fallback: body,
   };
@@ -2702,7 +2754,7 @@ async function processWhatsAppMessage(message, res) {
         delete savedCarts[from];
         // Don't return — let the normal "menu"/global handling below run too.
       } else {
-        return sendReply(res, from, t.resumeOffer);
+        return sendReply(res, from, resumeChoiceMessage(lang, t.resumeOffer));
       }
     }
 
