@@ -3558,6 +3558,313 @@ app.get('/', (req, res) => {
   res.send('WhatsApp bot is running.');
 });
 
+// ---- KITCHEN DASHBOARD ----
+// A live order queue for a tablet in the kitchen. Deliberately writes status
+// straight back to Manager!H, which means the EXISTING pollOrderStatus job
+// picks the change up and messages the customer — no separate notification
+// path to keep in sync. Status values must therefore match STATUS_MESSAGES's
+// keys exactly (case-sensitive); KITCHEN_STATUSES below is the whitelist.
+//
+// Auth: one shared password (KITCHEN_PASSWORD) exchanged for a long-lived
+// cookie, so staff type it once per device. This page exposes customer
+// phone numbers and delivery addresses and can trigger real WhatsApp sends,
+// so it is never left open — if KITCHEN_PASSWORD is unset the routes refuse
+// to serve rather than defaulting to public.
+const KITCHEN_STATUSES = ['Preparing', 'Ready for Pickup', 'Out for Delivery', 'Completed', 'Cancelled'];
+const KITCHEN_COOKIE = 'kitchen_auth';
+
+function kitchenPasswordHash() {
+  return crypto.createHash('sha256').update(String(process.env.KITCHEN_PASSWORD || '')).digest('hex');
+}
+
+function kitchenAuthed(req) {
+  if (!process.env.KITCHEN_PASSWORD) return false;
+  const raw = req.headers.cookie || '';
+  const match = raw.split(';').map(c => c.trim()).find(c => c.startsWith(`${KITCHEN_COOKIE}=`));
+  if (!match) return false;
+  const supplied = match.slice(KITCHEN_COOKIE.length + 1);
+  const expected = kitchenPasswordHash();
+  // Constant-time compare — this is a shared secret guarding customer PII.
+  const a = Buffer.from(supplied);
+  const b = Buffer.from(expected);
+  return a.length === b.length && crypto.timingSafeEqual(a, b);
+}
+
+function requireKitchenAuth(req, res) {
+  if (!process.env.KITCHEN_PASSWORD) {
+    res.status(503).send('Kitchen dashboard is not configured — set KITCHEN_PASSWORD in the environment.');
+    return false;
+  }
+  if (!kitchenAuthed(req)) {
+    res.status(401).json({ error: 'unauthorized' });
+    return false;
+  }
+  return true;
+}
+
+app.post('/kitchen/login', (req, res) => {
+  if (!process.env.KITCHEN_PASSWORD) return res.status(503).json({ error: 'not configured' });
+  const supplied = String((req.body && req.body.password) || '');
+  const a = Buffer.from(crypto.createHash('sha256').update(supplied).digest('hex'));
+  const b = Buffer.from(kitchenPasswordHash());
+  if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) {
+    return res.status(401).json({ error: 'wrong password' });
+  }
+  // 1 year — the whole point is that staff authenticate once per device.
+  res.setHeader('Set-Cookie', `${KITCHEN_COOKIE}=${kitchenPasswordHash()}; Max-Age=31536000; Path=/kitchen; HttpOnly; SameSite=Lax`);
+  res.json({ ok: true });
+});
+
+// Open orders, newest first. "Open" = anything not yet Completed/Cancelled.
+app.get('/kitchen/orders', async (req, res) => {
+  if (!requireKitchenAuth(req, res)) return;
+  try {
+    managerRowsCache = null; // the kitchen needs live data, not a 5s-stale copy
+    const rows = await fetchManagerRows();
+    const orders = rows.map((r, i) => {
+      const [orderNumber, timestamp, items, total, mode, language, phone, status] = r;
+      return {
+        rowNum: i + 2, // sheet row (header is row 1) — used for the status write
+        orderNumber, timestamp, items, total, mode, language, phone,
+        status: (status || 'Confirmed').trim(),
+      };
+    }).filter(o => o.orderNumber && !['Completed', 'Cancelled'].includes(o.status));
+    orders.reverse();
+    res.json({ orders, statuses: KITCHEN_STATUSES });
+  } catch (err) {
+    console.error('Kitchen dashboard order fetch failed:', err.message || err);
+    res.status(500).json({ error: 'could not load orders' });
+  }
+});
+
+app.post('/kitchen/status', async (req, res) => {
+  if (!requireKitchenAuth(req, res)) return;
+  const { rowNum, orderNumber, status } = req.body || {};
+  if (!KITCHEN_STATUSES.includes(status)) return res.status(400).json({ error: 'unknown status' });
+  if (!Number.isInteger(rowNum) || rowNum < 2) return res.status(400).json({ error: 'bad row' });
+  try {
+    // Re-read and verify the row still holds the order the tablet thinks it
+    // does before writing. Staff reorder and delete Manager rows routinely
+    // (the same hazard documented on pollOrderStatus's cache key), so a row
+    // number captured seconds ago can already point at a different order —
+    // and writing blind would set a STRANGER's order status, firing a wrong
+    // WhatsApp update to a real customer.
+    const rows = await fetchManagerRows();
+    const current = rows[rowNum - 2];
+    if (!current || String(current[0]) !== String(orderNumber)) {
+      return res.status(409).json({ error: 'This order moved in the sheet — refresh and try again.' });
+    }
+    await withSessionLock('__sheets_manager_kitchen_write__', async () => {
+      await withTimeout(sheets.spreadsheets.values.update({
+        spreadsheetId: process.env.GOOGLE_SHEETS_ID,
+        range: `Manager!H${rowNum}`,
+        valueInputOption: 'USER_ENTERED',
+        requestBody: { values: [[status]] },
+      }), 6000);
+    });
+    managerRowsCache = null;
+    console.log(`Kitchen dashboard: order #${orderNumber} -> ${status}`);
+    // No customer message is sent from here on purpose — pollOrderStatus
+    // sees the sheet change on its next pass and sends it, so the dashboard
+    // and a manual sheet edit behave identically.
+    res.json({ ok: true });
+  } catch (err) {
+    console.error('Kitchen dashboard status update failed:', err.message || err);
+    res.status(500).json({ error: 'could not update status' });
+  }
+});
+
+// Self-contained: no CDN, no build step, works on an old tablet browser.
+// Polls every 10s; a genuinely new order number triggers a sound + flash,
+// because the whole point is that it's hard to miss during a rush.
+const KITCHEN_HTML = `<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Kitchen — Créme De La Créme</title>
+<style>
+  :root { --bg:#12141a; --card:#1c1f28; --line:#2c3140; --text:#f2f4f8; --dim:#98a0b3;
+          --new:#ffb020; --prep:#3b82f6; --ready:#22c55e; --deliver:#a855f7; }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--text);
+         font:16px/1.5 system-ui,-apple-system,Segoe UI,Roboto,sans-serif; }
+  header { position:sticky; top:0; background:var(--bg); border-bottom:1px solid var(--line);
+           padding:14px 18px; display:flex; align-items:center; gap:14px; z-index:5; }
+  h1 { font-size:19px; margin:0; font-weight:650; }
+  .count { background:var(--new); color:#000; font-weight:700; border-radius:999px;
+           padding:2px 11px; font-size:15px; }
+  .muted { color:var(--dim); font-size:13px; margin-left:auto; }
+  main { padding:16px; display:grid; gap:14px;
+         grid-template-columns:repeat(auto-fill,minmax(330px,1fr)); }
+  .card { background:var(--card); border:1px solid var(--line); border-left:5px solid var(--new);
+          border-radius:12px; padding:15px; }
+  .card.s-Preparing { border-left-color:var(--prep); }
+  .card.s-Ready { border-left-color:var(--ready); }
+  .card.s-Out { border-left-color:var(--deliver); }
+  .card.flash { animation:flash 1s ease-in-out 3; }
+  @keyframes flash { 0%,100%{background:var(--card);} 50%{background:#3a2f12;} }
+  .top { display:flex; align-items:baseline; gap:10px; margin-bottom:8px; }
+  .num { font-size:23px; font-weight:700; }
+  .time { color:var(--dim); font-size:13px; margin-left:auto; }
+  .mode { font-size:14px; font-weight:600; margin-bottom:8px; }
+  .items { white-space:pre-line; margin:10px 0; padding:10px; background:#161923;
+           border-radius:8px; font-size:15px; }
+  .meta { color:var(--dim); font-size:13px; margin:3px 0; word-break:break-word; }
+  .status { display:inline-block; font-size:12px; font-weight:700; text-transform:uppercase;
+            letter-spacing:.04em; color:var(--dim); margin-bottom:9px; }
+  .btns { display:flex; flex-wrap:wrap; gap:7px; margin-top:11px; }
+  button { font:inherit; font-size:14px; font-weight:600; border:1px solid var(--line);
+           background:#252a36; color:var(--text); border-radius:8px; padding:9px 13px;
+           cursor:pointer; min-height:42px; }
+  button:hover { background:#2f3543; }
+  button:disabled { opacity:.45; cursor:default; }
+  button.go { background:var(--ready); color:#04210f; border-color:transparent; }
+  button.warn { background:#3a2020; color:#ffc9c9; border-color:#5a2b2b; }
+  .empty { color:var(--dim); text-align:center; padding:70px 20px; grid-column:1/-1; }
+  #login { max-width:340px; margin:16vh auto; padding:26px; background:var(--card);
+           border:1px solid var(--line); border-radius:12px; }
+  #login input { width:100%; font:inherit; padding:12px; margin:12px 0; border-radius:8px;
+                 border:1px solid var(--line); background:#161923; color:var(--text); }
+  #login button { width:100%; background:var(--ready); color:#04210f; border-color:transparent; }
+  .err { color:#ff9b9b; font-size:14px; min-height:20px; }
+</style>
+</head>
+<body>
+<div id="login" hidden>
+  <h1>Kitchen Login</h1>
+  <input type="password" id="pw" placeholder="Password" autocomplete="current-password">
+  <button onclick="login()">Enter</button>
+  <div class="err" id="loginErr"></div>
+</div>
+
+<div id="app" hidden>
+  <header>
+    <h1>Orders</h1><span class="count" id="count">0</span>
+    <span class="muted" id="updated">—</span>
+  </header>
+  <main id="list"></main>
+</div>
+
+<script>
+var seen = JSON.parse(sessionStorage.getItem('seenOrders') || '[]');
+var first = true;
+
+function esc(s){ return String(s == null ? '' : s).replace(/[&<>"']/g, function(c){
+  return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]; }); }
+
+function beep(){
+  try {
+    var ctx = new (window.AudioContext || window.webkitAudioContext)();
+    var o = ctx.createOscillator(), g = ctx.createGain();
+    o.connect(g); g.connect(ctx.destination);
+    o.frequency.value = 880; o.type = 'sine';
+    g.gain.setValueAtTime(0.28, ctx.currentTime);
+    g.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.55);
+    o.start(); o.stop(ctx.currentTime + 0.55);
+  } catch (e) {}
+}
+
+function login(){
+  var pw = document.getElementById('pw').value;
+  fetch('/kitchen/login', { method:'POST', headers:{'Content-Type':'application/json'},
+                            body: JSON.stringify({ password: pw }) })
+    .then(function(r){ return r.ok ? load() : r.json().then(function(j){ throw new Error(j.error || 'failed'); }); })
+    .catch(function(e){ document.getElementById('loginErr').textContent = e.message; });
+}
+
+function showLogin(){
+  document.getElementById('login').hidden = false;
+  document.getElementById('app').hidden = true;
+}
+
+function setStatus(rowNum, orderNumber, status, btn){
+  btn.disabled = true;
+  fetch('/kitchen/status', { method:'POST', headers:{'Content-Type':'application/json'},
+                             body: JSON.stringify({ rowNum: rowNum, orderNumber: orderNumber, status: status }) })
+    .then(function(r){ return r.json().then(function(j){ if(!r.ok) throw new Error(j.error||'failed'); }); })
+    .then(load)
+    .catch(function(e){ alert(e.message); btn.disabled = false; });
+}
+
+function card(o){
+  var short = o.status === 'Ready for Pickup' ? 'Ready'
+            : o.status === 'Out for Delivery' ? 'Out' : o.status;
+  var isNew = seen.indexOf(String(o.orderNumber)) === -1;
+  var d = document.createElement('div');
+  d.className = 'card s-' + short + (isNew && !first ? ' flash' : '');
+  var deliver = String(o.mode || '').toLowerCase().indexOf('delivery') === 0;
+  d.innerHTML =
+    '<div class="top"><span class="num">#' + esc(o.orderNumber) + '</span>' +
+      '<span class="time">' + esc(o.timestamp) + '</span></div>' +
+    '<div class="status">' + esc(o.status) + '</div>' +
+    '<div class="mode">' + (deliver ? '🏍️ ' : '📦 ') + esc(o.mode) + '</div>' +
+    '<div class="items">' + esc(o.items) + '</div>' +
+    '<div class="meta"><strong>$' + esc(o.total) + '</strong></div>' +
+    (o.phone ? '<div class="meta">📞 ' + esc(o.phone) + '</div>' : '') +
+    '<div class="btns"></div>';
+  var btns = d.querySelector('.btns');
+  var next = [['Preparing','Preparing'],
+              deliver ? ['Out for Delivery','Out for delivery'] : ['Ready for Pickup','Ready'],
+              ['Completed','Done'], ['Cancelled','Cancel']];
+  next.forEach(function(pair){
+    if (pair[0] === o.status) return;
+    var b = document.createElement('button');
+    b.textContent = pair[1];
+    if (pair[0] === 'Completed') b.className = 'go';
+    if (pair[0] === 'Cancelled') b.className = 'warn';
+    b.onclick = function(){ setStatus(o.rowNum, o.orderNumber, pair[0], b); };
+    btns.appendChild(b);
+  });
+  return d;
+}
+
+function load(){
+  return fetch('/kitchen/orders')
+    .then(function(r){
+      if (r.status === 401) { showLogin(); throw new Error('auth'); }
+      return r.json();
+    })
+    .then(function(data){
+      document.getElementById('login').hidden = true;
+      document.getElementById('app').hidden = false;
+      var list = document.getElementById('list');
+      list.innerHTML = '';
+      var orders = data.orders || [];
+      document.getElementById('count').textContent = orders.length;
+      document.getElementById('updated').textContent =
+        'updated ' + new Date().toLocaleTimeString();
+      if (!orders.length) {
+        list.innerHTML = '<div class="empty">No open orders.</div>';
+      } else {
+        var fresh = orders.some(function(o){ return seen.indexOf(String(o.orderNumber)) === -1; });
+        orders.forEach(function(o){ list.appendChild(card(o)); });
+        if (fresh && !first) beep();
+      }
+      seen = orders.map(function(o){ return String(o.orderNumber); });
+      sessionStorage.setItem('seenOrders', JSON.stringify(seen));
+      first = false;
+      document.title = (orders.length ? '(' + orders.length + ') ' : '') + 'Kitchen';
+    })
+    .catch(function(e){ if (e.message !== 'auth') console.error(e); });
+}
+
+load();
+setInterval(load, 10000);
+document.getElementById('pw').addEventListener('keydown', function(e){
+  if (e.key === 'Enter') login();
+});
+</script>
+</body>
+</html>`;
+
+app.get('/kitchen', (req, res) => {
+  if (!process.env.KITCHEN_PASSWORD) {
+    return res.status(503).send('Kitchen dashboard is not configured — set KITCHEN_PASSWORD in the environment.');
+  }
+  res.type('html').send(KITCHEN_HTML);
+});
+
 // Guarded so require()'ing this file (the replay-test harness does exactly
 // that) never starts a real server, hits the network, or schedules timers —
 // only `node index.js` (require.main === module) boots the live bot.
