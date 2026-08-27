@@ -17,7 +17,7 @@ the current value in both `DRIVER_NUMBERS` and `OWNER_NUMBERS`).
 
 ## Stack
 
-- Node/Express, single-file app in `index.js` (~3000 lines)
+- Node/Express, single-file app in `index.js` (~3600 lines)
 - `menu-data.js` — static menu structure
 - Google Sheets (`googleapis`) — order log (Manager/Kitchen tabs), menu
   availability + prices (Availability tab), customer profiles (Customers tab)
@@ -31,11 +31,14 @@ the current value in both `DRIVER_NUMBERS` and `OWNER_NUMBERS`).
 1. `npm install`
 2. Copy `.env.example` to `.env` and fill in real values (transferred
    separately/securely — never via git; see "Secrets" below).
-3. `node index.js` runs it locally. There is no test suite wired to `npm
-   test` as of this handoff — `index.js` was mid-way through adding a
-   `BOT_DRY_RUN` replay-test harness (see "In-flight work" below) but the
-   actual `test/replay.test.js` file referenced in its comments doesn't
-   exist yet.
+3. `node index.js` runs it locally. `npm test` runs the replay suite
+   (`node --test test/*.test.js`) — 34 tests covering the ordering FSM,
+   button routing, owner commands, and the escalation ladder. They use
+   `BOT_DRY_RUN=1` (set by the test files themselves) so no real WhatsApp
+   send or Sheets write happens, even with real credentials in `.env`.
+   Run them before every deploy — `npm run predeploy` is the same thing.
+   Note: on Windows/Node 25 the glob form `node --test test/*.test.js` is
+   required; bare `node --test test/` fails with `Cannot find module 'test'`.
 4. Deploy target is **Railway**, project `creme-de-la-creme-bot`. **There is
    no CI/CD** — deploy is a manual `railway up --detach` run from this
    directory. Editing `index.js` locally does nothing to the live bot until
@@ -64,11 +67,12 @@ personalization + saved addresses + substitutions, owner commands +
 abandoned-cart recovery). See `ROADMAP.md` in this repo for the up-to-date
 list — it's the source of truth for feature asks going forward.
 
-**Not built:** kitchen ticket/printer integration (blocked on the owner
-specifying what hardware/service they'd actually use — don't guess) and
-voice-note ordering (scoped in `ROADMAP.md` but not started; would need a
-transcription step, likely Gemini audio input, ahead of the existing
-text-parsing path).
+Voice-note ordering **is** built and live (`transcribeVoiceNote()` — Gemini
+audio in, transcript through the same text-parsing path). An earlier version
+of this file listed it as not started; that was wrong.
+
+**Not built:** kitchen ticket/printer integration — blocked on the owner
+specifying what hardware/service they'd actually use. Don't guess.
 
 ## In-flight work at handoff time
 
@@ -90,15 +94,13 @@ message). Summary of what it adds:
 - **`uncaughtException`/`unhandledRejection` handlers** — alert the owner
   and exit cleanly so Railway restarts the process, instead of an unnoticed
   silent hang or crash loop.
-- **`BOT_DRY_RUN` / replay-test scaffolding** — when `BOT_DRY_RUN=1` is set
-  *before* requiring `index.js`, all real WhatsApp sends and Sheets
-  reads/writes are stubbed instead of hitting the network, and
-  `module.exports` now exposes `{ app, processWhatsAppMessage, dryRunSent,
-  sessions, lastOrders, cartTotal, OWNER_NUMBERS }` for a test harness to
-  drive. **The actual test file (`test/replay.test.js`) referenced in the
-  code's comments was never written** — this is scaffolding for testing
-  infrastructure that doesn't exist yet, not a finished feature. Worth
-  either finishing it or ripping it out; don't assume it works untested.
+- **`BOT_DRY_RUN` / replay tests** — when `BOT_DRY_RUN=1` is set *before*
+  requiring `index.js`, all real WhatsApp sends and Sheets reads/writes are
+  stubbed instead of hitting the network, and `module.exports` exposes the
+  internals a test harness needs to drive it. This was scaffolding-only at
+  handoff time; **it is finished now** — `test/replay.test.js` and
+  `test/menu-sheet.test.js` exist, with fixtures in `test/replays/*.json`,
+  and all 34 pass. Do not rip it out.
 - `sendReply` was changed from fire-and-forget to properly `async`/awaited
   so that two rapid messages from the same sender have their actual sends
   (not just session-state mutations) stay in order under the existing

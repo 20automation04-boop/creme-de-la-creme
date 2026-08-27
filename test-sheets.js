@@ -1,10 +1,22 @@
 // test-sheets.js
-// Standalone test — calls logOrderToSheets() directly with fake order data.
-// Doesn't touch Twilio, Express, or WhatsApp at all. Just checks: can this
-// server account actually write to your Google Sheet?
+// Standalone credentials check — "can this service account actually reach the
+// Google Sheet?" Doesn't touch Express or WhatsApp at all.
 //
-// Run with:  node test-sheets.js
-// Then check your "Kitchen" and "Manager Log" tabs for a new test row.
+// ⚠️  THIS WRITES A REAL ROW TO THE REAL PRODUCTION SHEET. It is NOT part of
+// `npm test` (that's the dry-run replay suite in test/, which never touches
+// the network). Despite the name, this is a manual diagnostic — staff see
+// whatever it writes. It therefore refuses to run without an explicit flag:
+//
+//   node test-sheets.js --write-to-production
+//
+// Then delete the test row (order #9999) from the Manager and Kitchen tabs.
+//
+// NOTE: the row shape below is kept deliberately in sync with
+// logOrderToSheets() in index.js (8 columns, A:H). An earlier version wrote
+// only 6 columns via values.append, which left rows with no phone and no
+// status — Manager row 2 in the live sheet is one of those orphans, and a
+// missing phone breaks the STATUS and `cancel order` lookups, which match on
+// order number AND phone.
 
 require('dotenv').config();
 const { google } = require('googleapis');
@@ -64,9 +76,12 @@ async function logOrderToSheets(orderNumber, session) {
   console.log('Attempting to write to Manager tab...');
   await withTimeout(sheets.spreadsheets.values.append({
     spreadsheetId: process.env.GOOGLE_SHEETS_ID,
-    range: 'Manager!A:F',
+    range: 'Manager!A:H',
     valueInputOption: 'USER_ENTERED',
-    requestBody: { values: [[orderNumber, timestamp, itemsWithPrice, total, modeText, session.language]] },
+    // 8 columns, matching logOrderToSheets(): order#, time, items, total,
+    // mode, language, phone, status. Phone and status must not be left
+    // blank — see the header comment.
+    requestBody: { values: [[orderNumber, timestamp, itemsWithPrice, total, modeText, session.language, '+10000009999', 'Confirmed']] },
   }), 8000);
   console.log('✅ Manager tab write succeeded.');
 
@@ -92,6 +107,17 @@ const fakeSession = {
 };
 
 const testOrderNumber = 9999;
+
+// Guard: this writes to the real sheet staff read, so it can't be run by
+// reflex or by someone assuming a file named "test-*" is safe.
+if (!process.argv.includes('--write-to-production')) {
+  console.error('⚠️  test-sheets.js writes a REAL row to the REAL production sheet.');
+  console.error('    Re-run with --write-to-production if that is genuinely what you want,');
+  console.error('    then delete the #9999 row from the Manager and Kitchen tabs afterwards.');
+  console.error('');
+  console.error('    For safe, offline regression testing use `npm test` instead.');
+  process.exit(1);
+}
 
 logOrderToSheets(testOrderNumber, fakeSession)
   .then(() => {

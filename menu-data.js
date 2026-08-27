@@ -1,7 +1,12 @@
 // menu-data.js
-// Single source of truth for the menu. Both whatsapp-bot.js and
+// Single source of truth for the menu's STARTING state. Both index.js and
 // seed-availability.js require this file, so the menu only ever lives in
 // one place — edit it here and both stay in sync automatically.
+//
+// At runtime the Availability sheet layers on top of this: it can mark items
+// sold out, override prices, rename items, add new ones, and discontinue
+// them without a deploy (see applyMenuSheetRows in index.js). So this file
+// is the baseline, not necessarily what customers see right now.
 //
 // Items with a `sizes` array offer Regular/Large; items with a flat `price` don't.
 
