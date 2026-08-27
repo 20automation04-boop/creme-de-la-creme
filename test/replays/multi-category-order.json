@@ -1,0 +1,19 @@
+{
+  "name": "orders-items-from-multiple-categories-without-losing-cart",
+  "from": "19990000020",
+  "turns": [
+    { "in": "1", "expectStep": "menu" },
+    { "in": "8", "expectStep": "item" },
+    { "in": "3", "expectStep": "quantity" },
+    { "in": "1", "expectStep": "notes" },
+    { "in": "0", "expectStep": "item", "expectCartLength": 1, "expectReplyContains": "type *menu*" },
+    { "in": "4", "expectStep": "quantity" },
+    { "in": "1", "expectStep": "notes" },
+    { "in": "0", "expectStep": "item", "expectCartLength": 2 },
+    { "in": "menu", "expectStep": "menu", "expectCartLength": 2 },
+    { "in": "1", "expectStep": "item", "expectCartLength": 2 },
+    { "in": "2", "expectStep": "quantity" },
+    { "in": "1", "expectStep": "notes" },
+    { "in": "0", "expectStep": "item", "expectCartLength": 3, "expectCartTotal": 27 }
+  ]
+}

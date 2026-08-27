@@ -1,0 +1,17 @@
+{
+  "name": "cart-size-is-capped",
+  "from": "19990000024",
+  "turns": [
+    { "in": "1", "expectStep": "menu" },
+    { "presetCartLines": 19 },
+    { "in": "1", "expectStep": "item" },
+    { "in": "1", "expectStep": "quantity" },
+    { "in": "2", "expectStep": "notes" },
+    { "in": "0", "expectStep": "item", "expectCartLength": 20 },
+    { "in": "menu", "expectStep": "menu", "expectCartLength": 20 },
+    { "in": "1", "expectStep": "item" },
+    { "in": "2", "expectStep": "quantity" },
+    { "in": "1", "expectStep": "notes" },
+    { "in": "0", "expectStep": "item", "expectCartLength": 20, "expectReplyContains": "lot going on" }
+  ]
+}

@@ -157,7 +157,14 @@ async function sendReply(res, to, textOrMessages) {
   pushTranscript(to, 'bot', replySummaryText(textOrMessages));
   if (!res.headersSent) res.sendStatus(200); // the webhook is usually already acked earlier — see app.post('/whatsapp')
   const messages = Array.isArray(textOrMessages) ? textOrMessages : [textOrMessages];
-  for (const m of messages.filter(Boolean)) {
+  const toSend = messages.filter(Boolean);
+  for (const [i, m] of toSend.entries()) {
+    // A small stagger before the 2nd+ message in a multi-message reply so a
+    // 2-3 message bundle (very common — e.g. [itemNotFound, categoryList])
+    // reads like someone sending a quick follow-up thought instead of a
+    // simultaneous dump. Skipped in dry-run since it's purely a real-network
+    // pacing effect and would just slow down the test suite for no benefit.
+    if (i > 0 && !BOT_DRY_RUN) await new Promise(r => setTimeout(r, 400));
     try {
       await sendWhatsAppMessage(to, m);
     } catch (err) {
@@ -1201,6 +1208,17 @@ async function pollOrderStatus() {
 }
 
 const MAX_QTY = 50;
+// Caps the number of DISTINCT cart lines, not quantity per line (MAX_QTY
+// above already caps that). Generous enough for any genuine order this
+// shop's menu could produce, tight enough to stop a joke cart from growing
+// into dozens of different items. Bumping the quantity of an item ALREADY
+// in the cart never counts against this — only adding a genuinely NEW line
+// does (see addToCart).
+const MAX_CART_LINES = 20;
+// Generous enough for a real address plus landmark directions (common in
+// Belize where formal street addressing is sparse) — see where it's used
+// in the 'address' step for why this needs a cap at all.
+const MAX_ADDRESS_LENGTH = 300;
 
 // ---- SHOP FACTS ----
 // EDIT THESE FOUR VALUES to your shop's real numbers before going live.
@@ -1213,8 +1231,8 @@ const SHOP_INFO = {
   deliveryAreasEs: 'Belize City limits',
   deliveryTimeEn: '30-45 minutes',
   deliveryTimeEs: '30-45 minutos',
-  paymentEn: 'Cash only or online, including cash on delivery.',
-  paymentEs: 'Solo efectivo o enlinea, incluso contra entrega.',
+  paymentEn: 'Cash only for now, including cash on delivery.',
+  paymentEs: 'Por ahora solo efectivo, incluso contra entrega.',
   phone: '+501 606-9511',
 };
 
@@ -1288,6 +1306,21 @@ function nextOpeningText(lang) {
 // ---- LANGUAGE TEXT ----
 const TXT = {
   en: {
+    // Shown right after language selection, before a first-time customer has
+    // seen the menu — deliberately shorter than howToOrder() below (which
+    // adds the full command glossary). A stranger's first message shouldn't
+    // be a reference manual; the full list is one *help* away.
+    howToOrderShort: () => `🍧 *Créme De La Créme* 🍧
+
+*How to order:*
+1️⃣ Reply with a category number to browse
+2️⃣ Or just type what you want, e.g. "2 hot dogs, no onion, and a large mango smoothie, extra ice"
+3️⃣ Ask us anything — hours, delivery, payment methods
+4️⃣ Add more items any time, even mid-order — nothing locks in until you confirm ✅
+
+🏍️ Delivery available in ${SHOP_INFO.deliveryAreasEn} (${SHOP_INFO.deliveryTimeEn}) — or pick up in-store 📦
+
+Type *help* anytime to see all commands (cart, status, cancel, and more).`,
     howToOrder: () => `🍧 *Créme De La Créme* 🍧
 
 *How to order:*
@@ -1317,15 +1350,17 @@ const TXT = {
     cartTotal: (t) => `*Total: $${t}*`,
     backHint: '\n0. Back to menu',
     bulkHint: '\n\n💡 Tip for big orders: type itemNumber x quantity, e.g. *3x12*. (Bulk shortcut uses Regular size, no customization notes.)',
-    itemNotFound: 'Item number not found.',
-    qtyRange: (max) => `Please enter a quantity between 1 and ${max}.`,
+    itemNotFound: "I don't see that number on the menu — mind trying again?",
+    qtyRange: (max) => `Just need a number between 1 and ${max} there.`,
     added: (lines, total) => `Added ✅\n${lines}\nCart total: $${total}`,
     askQty: (name, price, max) => `${name} - $${price}\nHow many would you like? (1-${max}, or 0 to go back)`,
-    invalidQty: (max) => `Please enter a valid quantity (1-${max}).`,
+    invalidQty: (max) => `That doesn't look like a valid quantity — try a number between 1 and ${max}.`,
     askSize: (name, sizes) => `${name} — choose a size:\n${sizes.map(s => `${s.key}. ${s.label} - $${s.price.toFixed(2)}`).join('\n')}\n\n0. Back`,
-    invalidSize: 'Please reply with a valid size number.',
+    invalidSize: 'Can you double check that size number and try again?',
     askNotes: 'Any special requests for this item? (extra ice, no onions, etc.) Type *none* if not.',
+    noneButtonTitle: 'None ✅',
     cartEmptyCheckout: "Cart's empty — pick something first!",
+    cartFull: `Your cart's got a LOT going on already (${MAX_CART_LINES} different items!) — let's get this order checked out before adding more. Type *done* whenever you're ready!`,
     askMode: (fee) => `Pickup 📦 or delivery 🏍️? (Delivery is $${fee} BZD)`,
     pickupConfirm: '📦 Pickup order. Confirm? (yes/no)',
     askAddress: (fee) => `🏍️ What's the delivery address 📍 and a contact number?\n(Delivery fee: $${fee} BZD)`,
@@ -1337,7 +1372,8 @@ const TXT = {
     confirmInvalid: "Please reply 'yes' to confirm or 'no' to cancel.",
     notUnderstood: "Sorry, I didn't quite catch that — try a menu number, or type *help* for instructions.",
     humanHelp: (phone) => `📞 Need to talk to someone? Call us at ${phone}.`,
-    askConfirmNudge: "🧾 Want to add anything else? Just tell me — or type *done* whenever you're ready to checkout!",
+    askConfirmNudge: "🧾 Want to add anything else? Type *menu* to see other categories, or *done* whenever you're ready to checkout!",
+    doneButtonTitle: 'Done ✅',
     closedBanner: (hours, nextOpen) => `😴 *We're closed right now.*\nHours: ${hours}\nWe'll be back open ${nextOpen}.\n\n✅ You can still place a pre-order — we'll get started on it right when we open!\n\n`,
     soldOutItem: (name, substitute) => `😔 Sorry, ${name} is sold out right now.${substitute ? ` How about ${substitute} instead? 😋` : ''}`,
     noPreviousOrder: "You don't have a previous order to repeat yet — let's start one! 😊",
@@ -1367,6 +1403,19 @@ const TXT = {
     duplicateOrderWarning: (num) => `⚠️ Heads up — you just placed order #${num} a couple minutes ago. Sure you want to place *another* order? Reply *yes* again to confirm.`,
   },
   es: {
+    // Ver la nota en howToOrderShort (inglés) más arriba — misma idea, versión
+    // corta para el primer contacto, la lista completa de comandos vive en *help*.
+    howToOrderShort: () => `🍧 *Créme De La Créme* 🍧
+
+*Cómo ordenar:*
+1️⃣ Responde con el número de una categoría para explorar
+2️⃣ O simplemente escribe lo que quieres, ej. "2 hot dogs, sin cebolla, y un smoothie grande de mango, con hielo extra"
+3️⃣ Pregúntanos lo que sea — horario, entregas, formas de pago
+4️⃣ Añade más artículos cuando quieras, incluso a mitad de la orden — nada queda fijo hasta que confirmes ✅
+
+🏍️ Entrega disponible en ${SHOP_INFO.deliveryAreasEs} (${SHOP_INFO.deliveryTimeEs}) — o recoge en tienda 📦
+
+Escribe *help* cuando quieras para ver todos los comandos (cart, status, cancel, y más).`,
     howToOrder: () => `🍧 *Créme De La Créme* 🍧
 
 *Cómo ordenar:*
@@ -1396,15 +1445,17 @@ const TXT = {
     cartTotal: (t) => `*Total: $${t}*`,
     backHint: '\n0. Volver al menú',
     bulkHint: '\n\n💡 Tip para órdenes grandes: escribe número x cantidad, ej. *3x12*. (El atajo usa tamaño Regular, sin notas de personalización.)',
-    itemNotFound: 'Número de artículo no encontrado.',
-    qtyRange: (max) => `Ingresa una cantidad entre 1 y ${max}.`,
+    itemNotFound: 'Ese número no está en el menú — ¿lo intentas de nuevo?',
+    qtyRange: (max) => `Necesito un número entre 1 y ${max} para eso.`,
     added: (lines, total) => `Añadido ✅\n${lines}\nTotal del carrito: $${total}`,
     askQty: (name, price, max) => `${name} - $${price}\n¿Cuántos quieres? (1-${max}, o 0 para volver)`,
-    invalidQty: (max) => `Ingresa una cantidad válida (1-${max}).`,
+    invalidQty: (max) => `Esa cantidad no es válida — intenta un número entre 1 y ${max}.`,
     askSize: (name, sizes) => `${name} — elige un tamaño:\n${sizes.map(s => `${s.key}. ${s.label} - $${s.price.toFixed(2)}`).join('\n')}\n\n0. Volver`,
-    invalidSize: 'Responde con un número de tamaño válido.',
+    invalidSize: '¿Puedes revisar el número de tamaño e intentar de nuevo?',
     askNotes: '¿Alguna petición especial para este artículo? (extra hielo, sin cebolla, etc.) Escribe *ninguno* si no.',
+    noneButtonTitle: 'Ninguna ✅',
     cartEmptyCheckout: '¡Carrito vacío, elige algo primero!',
+    cartFull: `Tu carrito ya tiene bastante (¡${MAX_CART_LINES} artículos distintos!) — finalicemos esta orden antes de añadir más. ¡Escribe *done* cuando estés listo!`,
     askMode: (fee) => `¿Recoger 📦 o entrega 🏍️? (La entrega cuesta $${fee} BZD)`,
     pickupConfirm: '📦 Orden para recoger. ¿Confirmas? (si/no)',
     askAddress: (fee) => `🏍️ ¿Cuál es la dirección de entrega 📍 y un número de contacto?\n(Costo de entrega: $${fee} BZD)`,
@@ -1416,7 +1467,8 @@ const TXT = {
     confirmInvalid: "Responde 'si' o 'no'.",
     notUnderstood: 'No entendí eso — intenta un número del menú, o escribe *help* para instrucciones.',
     humanHelp: (phone) => `📞 ¿Necesitas hablar con alguien? Llámanos al ${phone}.`,
-    askConfirmNudge: "🧾 ¿Quieres añadir algo más? Solo dime — o escribe *done* cuando estés listo para finalizar!",
+    askConfirmNudge: "🧾 ¿Quieres añadir algo más? Escribe *menu* para ver otras categorías, o *done* cuando estés listo para finalizar!",
+    doneButtonTitle: 'Listo ✅',
     closedBanner: (hours, nextOpen) => `😴 *Estamos cerrados en este momento.*\nHorario: ${hours}\nAbrimos de nuevo ${nextOpen}.\n\n✅ Aún puedes hacer un pre-pedido — ¡empezaremos apenas abramos!\n\n`,
     soldOutItem: (name, substitute) => `😔 Lo sentimos, ${name} está agotado en este momento.${substitute ? ` ¿Qué tal ${substitute} en su lugar? 😋` : ''}`,
     noPreviousOrder: 'Aún no tienes una orden anterior para repetir — ¡empecemos una! 😊',
@@ -1666,7 +1718,29 @@ function transcriptText(session) {
 // Shared by the manual AGENT command and the automatic frustration-ladder
 // escalation — both need to reach the same staff number with the same
 // context so the customer never has to repeat themselves either way.
+// Per-customer cooldown so repeating "agent"/"human" doesn't flood a real
+// driver/owner phone — real staff attention is the scarce resource being
+// protected here, not the customer's reply (see below, the customer still
+// gets the normal "connecting you" reply every time regardless of this).
+// The auto-escalation path (frustration score) doesn't strictly need this —
+// it already has its own one-way-ratchet (escalationStage only fires once
+// per session) — but keying the cooldown here rather than per-call-site
+// means ANY future caller gets the same protection automatically.
+const lastEscalationAt = new Map(); // from -> timestamp
+const ESCALATION_COOLDOWN_MS = 5 * 60 * 1000;
+
+setInterval(() => {
+  const now = Date.now();
+  for (const [from, at] of lastEscalationAt) {
+    if (now - at > ESCALATION_COOLDOWN_MS) lastEscalationAt.delete(from);
+  }
+}, 10 * 60 * 1000).unref();
+
 function escalateToHuman(from, session, lang, reasonLine) {
+  const lastAt = lastEscalationAt.get(from);
+  if (lastAt !== undefined && Date.now() - lastAt < ESCALATION_COOLDOWN_MS) return;
+  lastEscalationAt.set(from, Date.now());
+
   const cartSummary = session.cart.length > 0 ? `\n\nCart:\n${cartText(session.cart, lang)}` : '';
   const note = getCustomerNote(from);
   const noteTag = note ? `\n⚠️ Customer note: ${note}` : '';
@@ -1676,13 +1750,22 @@ function escalateToHuman(from, session, lang, reasonLine) {
 }
 
 // ---- CART HELPERS ----
+// Returns true if the item was added/bumped, false if refused because the
+// cart is already at MAX_CART_LINES — bumping an item ALREADY in the cart
+// always succeeds (it doesn't grow the line count), only a genuinely NEW
+// line can be refused. Callers that skip checking the return value just
+// silently stop growing the cart past the cap, which is a safe default —
+// see the 'notes' step and applyMatchesToCart for the callers that DO
+// surface this to the customer.
 function addToCart(cart, name, price, qty, note = '', categoryId = null, itemIndex = null) {
   const existing = cart.find(c => c.name === name && c.price === price && (c.note || '') === note);
   if (existing) {
     existing.qty += qty;
-  } else {
-    cart.push({ name, price, qty, note, categoryId, itemIndex });
+    return true;
   }
+  if (cart.length >= MAX_CART_LINES) return false;
+  cart.push({ name, price, qty, note, categoryId, itemIndex });
+  return true;
 }
 
 function cartTotal(cart) {
@@ -1714,7 +1797,15 @@ function menuListText() {
   return MENU.map(cat => `${cat.id}. ${cat.category}`).join('\n');
 }
 
+// First-contact only (right after language selection) — deliberately the
+// short variant. Use helpText() for the *help*/*ayuda* command instead.
 function welcomeText(lang) {
+  return TXT[lang].howToOrderShort();
+}
+
+// Full instructions + command glossary, shown on explicit request (*help*/
+// *ayuda*) — not reused for first contact, see welcomeText() above.
+function helpText(lang) {
   return TXT[lang].howToOrder();
 }
 
@@ -1801,7 +1892,15 @@ function truncateForRow(name) {
 // way — rather than any other grouping — because Meta list messages cap at
 // 10 rows total and MENU has 11 categories, so one list can't hold them all.
 function categoryListMessages(lang) {
-  const toRows = cats => cats.map(cat => ({ id: cat.id, title: cat.category }));
+  // Prefixed ("cat:8", not bare "8") so a TAP is self-describing and can
+  // never collide with an item index or size key — see the global
+  // interactive-tap handler above the main switch for why this matters:
+  // WhatsApp never expires old interactive messages, so a customer can
+  // scroll up and tap a category button from much earlier in the chat at
+  // any time, long after the bot's internally moved on to a different
+  // category. Free-typed numbers are unaffected — they still resolve
+  // relative to whatever step the customer's currently on.
+  const toRows = cats => cats.map(cat => ({ id: `cat:${cat.id}`, title: cat.category }));
   const buttonLabel = lang === 'es' ? 'Ver categoría' : 'View category';
   // Both carry the SAME full text menu as fallback — sendReply's retry-on-
   // failure logic is per-message, not "one fallback covers the whole
@@ -1841,7 +1940,12 @@ function categoryItemsListMessage(cat, lang) {
       : `$${item.price.toFixed(2)}`;
     const { title, full } = truncateForRow(item.name);
     const description = ((full ? `${full} — ` : '') + priceText).slice(0, LIST_ROW_DESC_MAX);
-    rows.push({ id: String(i + 1), title, description });
+    // Self-describing id ("item:8:3": category 8, item 3) — same reasoning
+    // as categoryListMessages' "cat:" prefix above, so a stale tap on this
+    // exact row (possibly tapped much later, after the bot's moved on to
+    // tracking a different category) still resolves to THIS item, not
+    // whatever the current category happens to be.
+    rows.push({ id: `item:${cat.id}:${i + 1}`, title, description });
   });
 
   if (rows.length === 0) return categoryItemsText(cat, lang); // everything's sold out — plain text already explains that per item
@@ -1860,12 +1964,17 @@ function categoryItemsListMessage(cat, lang) {
   };
 }
 
-function sizeButtonsMessage(item, lang) {
+// categoryId/itemIndex identify WHICH item these size buttons belong to —
+// needed so each button's id can be self-describing ("size:6:1:2": category
+// 6, item 1, Large), same reasoning as the "cat:"/"item:" prefixes above. A
+// bare size key alone ("1"/"2") would collide with category and item-row
+// ids in the exact same small-integer space.
+function sizeButtonsMessage(item, lang, categoryId, itemIndex) {
   const body = TXT[lang].askSize(item.name, item.sizes);
   return {
     buttons: {
       body,
-      buttons: item.sizes.map(s => ({ id: s.key, title: `${s.label} - $${s.price.toFixed(2)}`.slice(0, 20) })),
+      buttons: item.sizes.map(s => ({ id: `size:${categoryId}:${itemIndex}:${s.key}`, title: `${s.label} - $${s.price.toFixed(2)}`.slice(0, 20) })),
     },
     fallback: body,
   };
@@ -1895,6 +2004,40 @@ function confirmButtonsMessage(bodyText, lang) {
       ],
     },
     fallback: bodyText,
+  };
+}
+
+// Adds a one-tap "None" quick-reply alongside the existing typed shorthand
+// (noNoteWords in the 'notes' step already accepts 'none'/'no'/'ninguno'/'0'
+// as plain text) — the button's id 'none' lands in that same check because
+// interactive taps set rawMsg to the tapped id (see extractInboundMessage),
+// so no new routing logic was needed here.
+function notesButtonsMessage(lang) {
+  const t = TXT[lang];
+  const body = t.askNotes;
+  return {
+    buttons: {
+      body,
+      buttons: [{ id: 'none', title: t.noneButtonTitle }],
+    },
+    fallback: body,
+  };
+}
+
+// Adds a one-tap "Done" quick-reply alongside the existing typed shorthand
+// ('done'/'listo'/'checkout' are already handled at both the 'menu' and
+// 'item' steps — see the case blocks below). Browsing other categories still
+// has its own buttons via the categoryList/categoryItems message that's
+// always sent right after this one; this only adds the missing checkout tap.
+function confirmNudgeMessage(lang) {
+  const t = TXT[lang];
+  const body = t.askConfirmNudge;
+  return {
+    buttons: {
+      body,
+      buttons: [{ id: 'done', title: t.doneButtonTitle }],
+    },
+    fallback: body,
   };
 }
 
@@ -2137,6 +2280,7 @@ Respond with ONLY raw JSON, no markdown, no explanation, in this exact shape:
 function applyMatchesToCart(session, matches) {
   const addedLines = [];
   const soldOutNames = [];
+  let capped = false;
   for (const m of matches) {
     const cat = MENU.find(c => c.id === String(m.categoryId));
     if (!cat) continue;
@@ -2162,11 +2306,18 @@ function applyMatchesToCart(session, matches) {
       price = item.price;
     }
 
-    addToCart(session.cart, name, price, qty, note, cat.id, m.itemIndex);
+    // addToCart itself decides whether this needs a new line (subject to
+    // MAX_CART_LINES) or is bumping an existing one (always allowed) — see
+    // its own comment. Stop processing further matches once genuinely
+    // capped, rather than silently dropping some and not others.
+    if (!addToCart(session.cart, name, price, qty, note, cat.id, m.itemIndex)) {
+      capped = true;
+      break;
+    }
     const noteStr = note ? ` [${note}]` : '';
     addedLines.push(`${name}${noteStr} x${qty} - $${(price * qty).toFixed(2)}`);
   }
-  return { added: addedLines, soldOut: soldOutNames };
+  return { added: addedLines, soldOut: soldOutNames, capped };
 }
 
 // ---- ORDER-ANYTIME HELPER ----
@@ -2208,9 +2359,9 @@ async function attemptFreeOrder(rawMsg, session) {
         : `That could be a few different things:\n${list}\n\nWhich one did you mean?`;
     }
   }
-  if (matches.length === 0) return { added: [], soldOut: [], answer };
-  const { added, soldOut } = applyMatchesToCart(session, matches);
-  return { added, soldOut, answer: null };
+  if (matches.length === 0) return { added: [], soldOut: [], answer, capped: false };
+  const { added, soldOut, capped } = applyMatchesToCart(session, matches);
+  return { added, soldOut, answer: null, capped };
 }
 
 // Reverse of findDirectMatches's substring check — here the CUSTOMER'S text
@@ -2242,6 +2393,9 @@ function orderResultText(result, session, lang) {
   }
   if (result.added.length > 0) {
     bits.push(t.added(result.added.join('\n'), cartTotal(session.cart).toFixed(2)));
+  }
+  if (result.capped) {
+    bits.push(t.cartFull);
   }
   return bits.join('\n\n');
 }
@@ -2563,7 +2717,10 @@ async function processWhatsAppMessage(message, res) {
       // with the same menu-access button the language-selection reply
       // already sends, so "help" doesn't leave a confused customer with
       // instructions but no visible way to actually reach the menu.
-      return sendReply(res, from, [welcomeText(lang), menuButtonMessage(lang)]);
+      // Uses helpText() (the full command glossary), not welcomeText() (the
+      // trimmed first-contact version) — help is exactly the moment someone
+      // wants the complete reference.
+      return sendReply(res, from, [helpText(lang), menuButtonMessage(lang)]);
     }
 
     if (msg === 'agent' || msg === 'agente' || msg === 'human' || msg === 'humano') {
@@ -2647,6 +2804,81 @@ async function processWhatsAppMessage(message, res) {
       return sendReply(res, from, messages);
     }
 
+    // ---- STALE/CROSS-CONTEXT BUTTON TAPS ----
+    // WhatsApp never expires old interactive messages — a customer can
+    // scroll up and tap a category/item/size button from EARLIER in the
+    // conversation at any time, long after the bot's internally moved on
+    // to tracking a different category or step. Free-typed numbers stay
+    // interpreted relative to whatever step the customer is currently on
+    // (typing "1" while being asked for a quantity must still mean
+    // quantity=1) — but a genuine button/list TAP carries a self-
+    // describing id ("cat:8", "item:8:3", "size:6:1:2" — see
+    // categoryListMessages/categoryItemsListMessage/sizeButtonsMessage)
+    // specifically so it ALWAYS routes to the right place regardless of
+    // current step, instead of being silently misread as an item number in
+    // whatever category the session happens to currently be tracking (the
+    // exact real-world bug this was built to fix — a customer tapped an
+    // old category button and either got the wrong item added with no
+    // error, or "Item number not found" if the id didn't happen to
+    // resolve to a valid index in the current category). Only fires for
+    // message.type === 'interactive' — never for typed text, which keeps
+    // its existing step-relative meaning untouched. An id from a message
+    // sent before this fix shipped (bare "1".."11", no prefix) simply
+    // won't match any of these patterns and falls through to the normal
+    // per-step handling below, same as it always has.
+    if (message.type === 'interactive') {
+      const catMatch = msg.match(/^cat:(\d+)$/);
+      const itemMatch = msg.match(/^item:(\d+):(\d+)$/);
+      const sizeMatch = msg.match(/^size:(\d+):(\d+):(\w+)$/);
+
+      if (catMatch) {
+        const cat = MENU.find(c => c.id === catMatch[1]);
+        if (cat) {
+          session.currentCategory = cat.id;
+          session.step = 'item';
+          return sendReply(res, from, categoryItemsListMessage(cat, lang));
+        }
+      } else if (itemMatch) {
+        const cat = MENU.find(c => c.id === itemMatch[1]);
+        const itemIndex = parseInt(itemMatch[2], 10);
+        const item = cat && cat.items[itemIndex - 1];
+        if (cat && item) {
+          session.currentCategory = cat.id;
+          if (isItemSoldOut(cat.id, itemIndex)) {
+            session.step = 'item';
+            return sendReply(res, from, [t.soldOutItem(item.name, suggestSubstitute(cat.id, itemIndex)), categoryItemsListMessage(cat, lang)]);
+          }
+          session.pendingItem = item;
+          session.pendingCategoryId = cat.id;
+          session.pendingItemIndex = itemIndex;
+          if (item.sizes) {
+            session.step = 'size';
+            return sendReply(res, from, sizeButtonsMessage(item, lang, cat.id, itemIndex));
+          }
+          session.step = 'quantity';
+          return sendReply(res, from, t.askQty(item.name, item.price.toFixed(2), MAX_QTY));
+        }
+      } else if (sizeMatch) {
+        const cat = MENU.find(c => c.id === sizeMatch[1]);
+        const itemIndex = parseInt(sizeMatch[2], 10);
+        const item = cat && cat.items[itemIndex - 1];
+        const size = item && item.sizes && item.sizes.find(s => s.key === sizeMatch[3]);
+        if (cat && item && size) {
+          session.currentCategory = cat.id;
+          if (isItemSoldOut(cat.id, itemIndex)) {
+            session.step = 'item';
+            return sendReply(res, from, [t.soldOutItem(item.name, suggestSubstitute(cat.id, itemIndex)), categoryItemsListMessage(cat, lang)]);
+          }
+          session.pendingItem = item;
+          session.pendingCategoryId = cat.id;
+          session.pendingItemIndex = itemIndex;
+          session.pendingSize = size;
+          session.step = 'quantity';
+          return sendReply(res, from, t.askQty(`${item.name} (${size.label})`, size.price.toFixed(2), MAX_QTY));
+        }
+      }
+    }
+
     let reply = '';
     let parseFailed = false; // set true at each "didn't understand" branch below — see the frustration-scoring block after the switch
 
@@ -2666,12 +2898,17 @@ async function processWhatsAppMessage(message, res) {
           } else {
             const addedLines = [];
             const soldOutLines = [];
+            let repeatCapped = false;
             last.cart.forEach(item => {
+              if (repeatCapped) return;
               if (item.categoryId != null && item.itemIndex != null && isItemSoldOut(item.categoryId, item.itemIndex)) {
                 soldOutLines.push(t.soldOutItem(item.name, suggestSubstitute(item.categoryId, item.itemIndex)));
                 return;
               }
-              addToCart(session.cart, item.name, item.price, item.qty, item.note, item.categoryId, item.itemIndex);
+              if (!addToCart(session.cart, item.name, item.price, item.qty, item.note, item.categoryId, item.itemIndex)) {
+                repeatCapped = true;
+                return;
+              }
               const noteStr = item.note ? ` [${item.note}]` : '';
               addedLines.push(`${item.name}${noteStr} x${item.qty} - $${(item.price * item.qty).toFixed(2)}`);
             });
@@ -2679,10 +2916,11 @@ async function processWhatsAppMessage(message, res) {
             const bits = [];
             if (soldOutLines.length > 0) bits.push(soldOutLines.join('\n'));
             if (addedLines.length > 0) bits.push(t.added(addedLines.join('\n'), cartTotal(session.cart).toFixed(2)));
+            if (repeatCapped) bits.push(t.cartFull);
 
             reply = [
               bits.length > 0 ? bits.join('\n\n') : t.noPreviousOrder,
-              t.askConfirmNudge,
+              confirmNudgeMessage(lang),
               ...categoryListMessages(lang),
             ];
           }
@@ -2702,7 +2940,7 @@ async function processWhatsAppMessage(message, res) {
             // nudge asking if they want more or are ready to confirm/checkout.
             reply = [
               orderResultText(orderResult, session, lang),
-              t.askConfirmNudge,
+              confirmNudgeMessage(lang),
               ...categoryListMessages(lang),
             ];
           } else if (orderResult.answer) {
@@ -2756,11 +2994,14 @@ async function processWhatsAppMessage(message, res) {
           } else {
             const name = item.sizes ? `${item.name} (${item.sizes[0].label})` : item.name;
             const price = item.sizes ? item.sizes[0].price : item.price;
-            addToCart(session.cart, name, price, qty, '', cat.id, itemIndex + 1);
+            if (!addToCart(session.cart, name, price, qty, '', cat.id, itemIndex + 1)) {
+              reply = [t.cartFull, categoryItemsListMessage(cat, lang)];
+              break;
+            }
             session.step = 'menu';
             reply = [
               t.added(`${name} x${qty} - $${(price * qty).toFixed(2)}`, cartTotal(session.cart).toFixed(2)),
-              t.askConfirmNudge,
+              confirmNudgeMessage(lang),
               ...categoryListMessages(lang),
             ];
           }
@@ -2778,16 +3019,28 @@ async function processWhatsAppMessage(message, res) {
           session.pendingItemIndex = index + 1;
           if (item.sizes) {
             session.step = 'size';
-            reply = sizeButtonsMessage(item, lang);
+            reply = sizeButtonsMessage(item, lang, cat.id, index + 1);
           } else {
             session.step = 'quantity';
             reply = t.askQty(item.name, item.price.toFixed(2), MAX_QTY);
           }
         } else {
-          // Not a valid item number — maybe they typed a whole new order instead.
-          const orderResult = await attemptFreeOrder(rawMsg, session);
-          if (orderResult.added.length > 0 || orderResult.soldOut.length > 0) {
+          // Not a valid item number — could be a question (hours, payment,
+          // delivery...) or a whole new order. Cheap keyword match first
+          // (same shortcut the 'menu' step uses) so a payment/hours
+          // question mid-category gets answered instantly instead of
+          // silently falling through to "item not found" — that used to
+          // happen here even when attemptFreeOrder's AI fallback DID
+          // generate a correct answer, because this branch only ever
+          // checked added/soldOut and threw the answer away.
+          const faqKey = matchFAQKeyword(msg);
+          const orderResult = faqKey ? null : await attemptFreeOrder(rawMsg, session);
+          if (faqKey) {
+            reply = [faqAnswer(faqKey, lang), categoryItemsListMessage(cat, lang)];
+          } else if (orderResult.added.length > 0 || orderResult.soldOut.length > 0) {
             reply = [orderResultText(orderResult, session, lang), categoryItemsListMessage(cat, lang)];
+          } else if (orderResult.answer) {
+            reply = [orderResult.answer, categoryItemsListMessage(cat, lang)];
           } else {
             parseFailed = true;
             reply = [t.itemNotFound, categoryItemsListMessage(cat, lang)];
@@ -2810,14 +3063,21 @@ async function processWhatsAppMessage(message, res) {
 
         const size = matchSizeChoice(msg, item.sizes);
         if (!size) {
-          // Not a valid size reply — try it as a new/extra order before giving up,
-          // then re-ask the size question so the original item isn't lost.
-          const orderResult = await attemptFreeOrder(rawMsg, session);
-          if (orderResult.added.length > 0 || orderResult.soldOut.length > 0) {
-            reply = [orderResultText(orderResult, session, lang), sizeButtonsMessage(item, lang)];
+          // Not a valid size reply — check for a quick FAQ match first (see
+          // the identical fix in the 'item' case above for why), then try
+          // it as a new/extra order, then re-ask the size question so the
+          // original item isn't lost.
+          const faqKey = matchFAQKeyword(msg);
+          const orderResult = faqKey ? null : await attemptFreeOrder(rawMsg, session);
+          if (faqKey) {
+            reply = [faqAnswer(faqKey, lang), sizeButtonsMessage(item, lang, session.pendingCategoryId, session.pendingItemIndex)];
+          } else if (orderResult.added.length > 0 || orderResult.soldOut.length > 0) {
+            reply = [orderResultText(orderResult, session, lang), sizeButtonsMessage(item, lang, session.pendingCategoryId, session.pendingItemIndex)];
+          } else if (orderResult.answer) {
+            reply = [orderResult.answer, sizeButtonsMessage(item, lang, session.pendingCategoryId, session.pendingItemIndex)];
           } else {
             parseFailed = true;
-            reply = [t.invalidSize, sizeButtonsMessage(item, lang)];
+            reply = [t.invalidSize, sizeButtonsMessage(item, lang, session.pendingCategoryId, session.pendingItemIndex)];
           }
         } else {
           session.pendingSize = size;
@@ -2840,15 +3100,22 @@ async function processWhatsAppMessage(message, res) {
 
         const qty = parseInt(msg, 10);
         if (!Number.isInteger(qty) || qty < 1 || qty > MAX_QTY || !/^\d+$/.test(msg)) {
-          // Not a valid quantity — try it as a new/extra order first, then
-          // re-ask the quantity question so the pending item isn't lost.
+          // Not a valid quantity — check for a quick FAQ match first (see
+          // the identical fix in the 'item' case above for why), then try
+          // it as a new/extra order, then re-ask the quantity question so
+          // the pending item isn't lost.
           const item = session.pendingItem;
           const size = session.pendingSize;
           const label = size ? `${item.name} (${size.label})` : item.name;
           const price = size ? size.price : item.price;
-          const orderResult = await attemptFreeOrder(rawMsg, session);
-          if (orderResult.added.length > 0 || orderResult.soldOut.length > 0) {
+          const faqKey = matchFAQKeyword(msg);
+          const orderResult = faqKey ? null : await attemptFreeOrder(rawMsg, session);
+          if (faqKey) {
+            reply = `${faqAnswer(faqKey, lang)}\n\n` + t.askQty(label, price.toFixed(2), MAX_QTY);
+          } else if (orderResult.added.length > 0 || orderResult.soldOut.length > 0) {
             reply = `${orderResultText(orderResult, session, lang)}\n\n` + t.askQty(label, price.toFixed(2), MAX_QTY);
+          } else if (orderResult.answer) {
+            reply = `${orderResult.answer}\n\n` + t.askQty(label, price.toFixed(2), MAX_QTY);
           } else {
             parseFailed = true;
             reply = t.invalidQty(MAX_QTY);
@@ -2856,7 +3123,7 @@ async function processWhatsAppMessage(message, res) {
         } else {
           session.pendingQty = qty;
           session.step = 'notes';
-          reply = t.askNotes;
+          reply = notesButtonsMessage(lang);
         }
         break;
       }
@@ -2880,7 +3147,7 @@ async function processWhatsAppMessage(message, res) {
         const noNoteWords = ['none', 'no', 'ninguno', 'ninguna', 'nada', 'n/a', 'na', '0'];
         const note = noNoteWords.includes(msg) ? '' : rawMsg.trim().slice(0, 60);
 
-        addToCart(session.cart, name, price, qty, note, session.pendingCategoryId, session.pendingItemIndex);
+        const added = addToCart(session.cart, name, price, qty, note, session.pendingCategoryId, session.pendingItemIndex);
         // Land back on this SAME category's item list (not the top-level
         // category list) so picking several items from one category — e.g.
         // three different drinks, each with its own note — doesn't require
@@ -2894,10 +3161,15 @@ async function processWhatsAppMessage(message, res) {
         session.pendingItemIndex = null;
         session.step = 'item';
 
+        if (!added) {
+          reply = [t.cartFull, categoryItemsListMessage(cat, lang)];
+          break;
+        }
+
         const noteStr = note ? ` [${note}]` : '';
         reply = [
           t.added(`${name}${noteStr} x${qty} - $${(price * qty).toFixed(2)}`, cartTotal(session.cart).toFixed(2)),
-          t.askConfirmNudge,
+          confirmNudgeMessage(lang),
           categoryItemsListMessage(cat, lang),
         ];
         break;
@@ -2919,10 +3191,17 @@ async function processWhatsAppMessage(message, res) {
           const savedAddr = getSavedAddress(from);
           reply = savedAddr ? savedAddressButtonsMessage(savedAddr, lang) : t.askAddress(SHOP_INFO.deliveryFee);
         } else {
-          // Didn't say pickup/delivery — maybe they're adding one more item first.
-          const orderResult = await attemptFreeOrder(rawMsg, session);
-          if (orderResult.added.length > 0 || orderResult.soldOut.length > 0) {
+          // Didn't say pickup/delivery — check for a quick FAQ match first
+          // (see the identical fix in the 'item' case above for why), then
+          // maybe they're adding one more item first.
+          const faqKey = matchFAQKeyword(msg);
+          const orderResult = faqKey ? null : await attemptFreeOrder(rawMsg, session);
+          if (faqKey) {
+            reply = [faqAnswer(faqKey, lang), modeButtonsMessage(SHOP_INFO.deliveryFee, lang)];
+          } else if (orderResult.added.length > 0 || orderResult.soldOut.length > 0) {
             reply = [orderResultText(orderResult, session, lang), cartText(session.cart, lang), modeButtonsMessage(SHOP_INFO.deliveryFee, lang)];
+          } else if (orderResult.answer) {
+            reply = [orderResult.answer, modeButtonsMessage(SHOP_INFO.deliveryFee, lang)];
           } else {
             parseFailed = true;
             reply = t.askModeInvalid;
@@ -2948,7 +3227,11 @@ async function processWhatsAppMessage(message, res) {
           reply = t.askAddress(SHOP_INFO.deliveryFee); // stay in 'address', re-ask plainly
           break;
         }
-        session.address = rawMsg;
+        // Capped, same reasoning as the per-item note cap above — this text
+        // goes straight into a real driver's WhatsApp notification and the
+        // Manager sheet, uncapped it could be up to WhatsApp's own ~4096-
+        // char message limit.
+        session.address = rawMsg.trim().slice(0, MAX_ADDRESS_LENGTH);
         session.step = 'confirm';
         // Fire-and-forget write-through — saved for next time regardless of
         // whether THIS order goes on to be confirmed or cancelled; it's a
@@ -3082,7 +3365,7 @@ async function processWhatsAppMessage(message, res) {
         if (session.step === 'menu' || session.step === 'item') {
           fallbackButtons = categoryListMessages(lang);
         } else if (session.step === 'size' && session.pendingItem) {
-          fallbackButtons = [sizeButtonsMessage(session.pendingItem, lang)];
+          fallbackButtons = [sizeButtonsMessage(session.pendingItem, lang, session.pendingCategoryId, session.pendingItemIndex)];
         } else if (session.step === 'mode') {
           fallbackButtons = [modeButtonsMessage(SHOP_INFO.deliveryFee, lang)];
         } else if (session.step === 'confirm') {
@@ -3118,7 +3401,17 @@ async function processWhatsAppMessage(message, res) {
     // replay-test harness both rely on to know processing has actually
     // finished — doesn't resolve before this last-resort reply goes out.
     try {
-      return await sendReply(res, from, "Sorry, something went wrong on our end — please try again in a moment. 🙏 / Lo sentimos, hubo un error — intenta de nuevo en un momento. 🙏");
+      // Prefer the customer's already-known language (set on an earlier
+      // turn) so a mid-conversation crash doesn't dump both languages at
+      // once — only a crash before language is ever established falls
+      // back to showing both.
+      const knownLang = sessions[from] && sessions[from].language;
+      const fallbackMsg = knownLang === 'es'
+        ? 'Lo sentimos, hubo un error de nuestro lado — intenta de nuevo en un momento. 🙏'
+        : knownLang === 'en'
+          ? 'Sorry, something went wrong on our end — please try again in a moment. 🙏'
+          : 'Sorry, something went wrong on our end — please try again in a moment. 🙏 / Lo sentimos, hubo un error — intenta de nuevo en un momento. 🙏';
+      return await sendReply(res, from, fallbackMsg);
     } catch (e2) {
       console.error('Also failed to send the error reply:', e2);
     }

@@ -47,6 +47,12 @@ function fakeRes() {
   return { headersSent: false, sendStatus() { this.headersSent = true; } };
 }
 
+// Resolves a dotted field path against a session object, e.g. "address" or
+// "address.length" (for expectFieldAtLeast/expectFieldAtMost).
+function readSessionField(session, path) {
+  return path.split('.').reduce((v, key) => (v === undefined || v === null ? v : v[key]), session);
+}
+
 function repliesText(sent, to) {
   return sent
     .filter(s => to === undefined || s.to === to)
@@ -88,6 +94,17 @@ for (const file of fixtureFiles) {
         s.lastMessageAt = Date.now() - turn.setLastMessageAtMsAgo;
       }
       if (turn.sweepIdle) bot.sweepIdleSessions();
+      if (turn.presetCartLines !== undefined) {
+        // Directly seeds N distinct dummy cart lines — for cart-cap tests,
+        // where actually walking the guided flow N times would make the
+        // fixture enormous and slow for no extra coverage value. Needs an
+        // existing session (fixtures should pick a language first).
+        const s = bot.sessions[from];
+        assert.ok(s, `${label}: presetCartLines needs an existing session`);
+        for (let n = 0; n < turn.presetCartLines; n++) {
+          s.cart.push({ name: `Dummy Item ${n}`, price: 1, qty: 1, note: '', categoryId: null, itemIndex: null });
+        }
+      }
 
       let sent = [];
       if (turn.in !== undefined || turn.buttonId || turn.listId) {
@@ -141,13 +158,23 @@ for (const file of fixtureFiles) {
       }
       if (turn.expectFieldAtLeast) {
         const [field, min] = turn.expectFieldAtLeast;
-        const got = bot.sessions[from][field];
+        const got = readSessionField(bot.sessions[from], field);
         assert.ok(got >= min, `${label}: expected session.${field} >= ${min}, got ${got}`);
+      }
+      if (turn.expectFieldAtMost) {
+        const [field, max] = turn.expectFieldAtMost;
+        const got = readSessionField(bot.sessions[from], field);
+        assert.ok(got <= max, `${label}: expected session.${field} <= ${max}, got ${got}`);
       }
       if (turn.expectSentTo) {
         const target = resolvePlaceholder(turn.expectSentTo);
         const gotSentToTarget = sent.some(s => s.to === target);
         assert.ok(gotSentToTarget, `${label}: expected a message sent to ${target}, but sends this turn went to: ${sent.map(s => s.to).join(', ') || '(none)'}`);
+      }
+      if (turn.expectNotSentTo) {
+        const target = resolvePlaceholder(turn.expectNotSentTo);
+        const gotSentToTarget = sent.some(s => s.to === target);
+        assert.ok(!gotSentToTarget, `${label}: expected NO message sent to ${target} this turn, but one was sent`);
       }
     }
   });

@@ -1,0 +1,11 @@
+{
+  "name": "agent-spam-does-not-flood-driver-phone",
+  "from": "19990000022",
+  "turns": [
+    { "in": "1", "expectStep": "menu" },
+    { "in": "agent", "expectSentTo": "__DRIVER__", "expectReplyContains": "connecting" },
+    { "in": "agent", "expectNotSentTo": "__DRIVER__", "expectReplyContains": "connecting" },
+    { "in": "agent", "expectNotSentTo": "__DRIVER__", "expectReplyContains": "connecting" },
+    { "in": "human", "expectNotSentTo": "__DRIVER__", "expectReplyContains": "connecting" }
+  ]
+}

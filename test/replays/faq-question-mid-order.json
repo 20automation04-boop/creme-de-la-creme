@@ -1,0 +1,16 @@
+{
+  "name": "faq-question-mid-order-does-not-derail-checkout",
+  "from": "19990000019",
+  "turns": [
+    { "in": "1", "expectStep": "menu" },
+    { "in": "1", "expectStep": "item" },
+    { "in": "what are the ways to pay", "expectStep": "item", "expectCartLength": 0, "expectReplyContains": "cash" },
+    { "in": "1", "expectStep": "quantity" },
+    { "in": "what are the ways to pay", "expectStep": "quantity", "expectReplyContains": "cash" },
+    { "in": "2", "expectStep": "notes" },
+    { "in": "0", "expectStep": "item", "expectCartLength": 1, "expectCartTotal": 14 },
+    { "in": "done", "expectStep": "mode" },
+    { "in": "do you deliver", "expectStep": "mode", "expectReplyContains": "deliver" },
+    { "in": "pickup", "expectStep": "confirm" }
+  ]
+}

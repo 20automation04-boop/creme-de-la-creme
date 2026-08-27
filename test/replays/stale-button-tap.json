@@ -1,0 +1,15 @@
+{
+  "name": "stale-category-button-tap-still-routes-correctly",
+  "from": "19990000021",
+  "turns": [
+    { "buttonId": "en", "expectStep": "menu" },
+    { "listId": "cat:8", "expectStep": "item" },
+    { "listId": "item:8:1", "expectStep": "quantity", "expectReplyContains": "Grilled Cheese" },
+    { "listId": "cat:1", "expectStep": "item", "expectReplyContains": "Frozen Drinks", "expectCartLength": 0 },
+    { "listId": "item:1:2", "expectStep": "quantity", "expectReplyContains": "Coffee" },
+    { "in": "1", "expectStep": "notes" },
+    { "in": "0", "expectStep": "item", "expectCartLength": 1, "expectCartTotal": 7 },
+    { "listId": "item:6:1", "expectStep": "size", "expectReplyContains": "Papaya" },
+    { "listId": "size:6:1:2", "expectStep": "quantity", "expectReplyContains": "Large" }
+  ]
+}
