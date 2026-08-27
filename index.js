@@ -1966,6 +1966,119 @@ function categoryListMessages(lang) {
   ];
 }
 
+// ---- REORDER PHRASINGS ----
+// The *repeat*/*repetir* keywords are advertised in the help glossary, but
+// most customers never read it — they just say "otra vez" or "la misma orden
+// que ayer". These are the natural ways people ask for their last order in
+// both languages; the bare keywords still work (and the "Reorder 🔁" button
+// sends the id 'repeat', matched by the first alternative).
+//
+// Deliberately conservative: this path ADDS the previous order's items to
+// the cart, so a false positive costs the customer real money. Every
+// alternative below needs an explicit reorder phrase — bare "again",
+// "usual", or "same" on their own are NOT enough, since "same" shows up in
+// ordinary chatter ("same for my friend") and would silently refill a cart.
+const REPEAT_RE = new RegExp([
+  '^(repeat|repetir|reorder|reordenar|otra vez|lo mismo)$',
+  '\\b(same (again|order|thing|as (last|before|always|usual)))',
+  '\\b(order|get|have) (the )?same\\b',
+  '\\b(order|buy) (it |that )?again\\b',
+  '\\b(my|the) usual\\b',
+  '\\brepeat (my |the )?(last )?order\\b',
+  '\\breorder\\b',
+  '\\b(otra vez|de nuevo|nuevamente)\\b',
+  '\\blo mismo\\b',
+  '\\bla misma orden\\b',
+  '\\bel mismo pedido\\b',
+  '\\blo de siempre\\b',
+  '\\b(igual|lo mismo) que (ayer|siempre|la (vez )?pasada|antes)\\b',
+  '\\bla misma de (ayer|siempre|la (vez )?pasada)\\b',
+  '\\brepet(ir|e|ime) (mi |la |el )?(orden|pedido)\\b',
+  '\\bcomo (siempre|la (vez )?pasada|ayer)\\b',
+].join('|'), 'i');
+
+// ---- NATURAL-LANGUAGE COMMAND ALIASES ----
+// Customers don't read the help glossary — they type "what's in my cart",
+// "eso es todo", "where's my order". Each entry maps a natural phrasing onto
+// a canonical command the existing handlers already understand, so nothing
+// downstream changes.
+//
+// Order matters: the FIRST match wins, so more specific intents come first.
+// "where is my order" must resolve to `status` before the vaguer "my order"
+// can claim it for `cart`.
+//
+// Only applied at the 'menu' and 'item' browsing steps (see its call site) —
+// at the address/notes/quantity steps free text is the customer's ANSWER,
+// and treating it as a command would swallow real content, the same class of
+// bug that once stored a note as someone's delivery address.
+// Each entry has two optional patterns:
+//   `re`    — distinctive enough to match anywhere in a longer sentence.
+//   `whole` — short/ambiguous, so it ONLY counts when it's essentially the
+//             entire message (politeness words stripped).
+//
+// The `whole` tier exists because of real, tested false positives: "2 hot
+// dogs no more onions" matched "no more" and CHECKED OUT instead of
+// ordering, and "mejor no le pongas cebolla" matched "mejor no" and
+// CANCELLED the order. Those fragments are perfectly normal inside an order,
+// so they can only be trusted when they're the whole message.
+const NATURAL_COMMANDS = [
+  // Order status — needs a "where/ready/how's it going" cue so it can't
+  // steal plain "my order" from the cart lookup below.
+  { cmd: 'status', re: /\b(where('?s| is)?\s*(my|the)\s*(order|food)|is (my|the) (order|food) (ready|done|coming)|how('?s| is) my (order|food)|track (my )?order|order status)\b|\b(d[oó]nde (est[aá]|va) mi (orden|pedido|comida)|c[oó]mo va mi (orden|pedido)|estado de mi (orden|pedido)|ya est[aá] (lista|listo) mi (orden|pedido))/i },
+
+  // Human handoff.
+  { cmd: 'agent', re: /\b(real (person|human)|talk to (a |an )?(human|person|someone|agent)|speak (to|with) (a |an )?(human|person|someone)|customer service)\b|\b(persona real|hablar con (alguien|una persona|un humano)|servicio al cliente)/i },
+
+  // Cart contents.
+  { cmd: 'cart', re: /\b(what('?s| is| do i have)?\s*(in )?(my|the) (cart|order|basket)|show (me )?(my|the) (cart|order)|see (my|the) (cart|order)|my cart|check (my )?cart|how much (is it|do i owe)|what did i order)\b|\b(qu[eé] (tengo|llevo) (en el carrito|hasta ahora)|ver (mi|el) (carrito|orden|pedido)|mi carrito|cu[aá]nto (es|va|llevo)|mu[eé]strame mi (orden|carrito))/i },
+
+  // Checkout. Note "no more"/"nada más"/"ya está" live in `whole` only —
+  // they're extremely common mid-order ("no more onions").
+  {
+    cmd: 'done',
+    re: /\b(that('?s| is) (all|it|everything)|i('?m| am) (done|finished)|finish (my )?order|check ?out|place (my )?order|ready to (pay|checkout))\b|\b(eso es todo|terminar( mi)? (orden|pedido)|finalizar( mi)? (orden|pedido)|listo para (ordenar|pagar)|ya termin[eé])/i,
+    whole: /^(no more|nothing else|that'?s all|done|finished|nada m[aá]s|es todo|ya est[aá]|ya)$/i,
+  },
+
+  // Instructions.
+  { cmd: 'help', re: /\b(how does this work|how do i (order|use)|i('?m| am)? ?(lost|confused)|don'?t understand|what do i do|instructions)\b|\b(c[oó]mo funciona|c[oó]mo (ordeno|pido|hago)|no entiendo|estoy perdid|instrucciones)/i },
+
+  // Back to the category list.
+  { cmd: 'menu', re: /\b(show (me )?(the )?menu|see (the )?menu|go (back )?to (the )?menu|other (categories|options)|full menu)\b|\b(ver (el )?men[uú]|mu[eé]strame el men[uú]|otras (categor[ií]as|opciones)|men[uú] completo)/i },
+
+  // Abandon the whole thing. "mejor no" / "déjalo" are whole-message only —
+  // both appear naturally inside customization requests.
+  {
+    cmd: 'cancel',
+    re: /\b(never ?mind|forget it|start over|cancel everything)\b|\b(olv[ií]dalo|empezar de nuevo|cancelar todo|ya no quiero nada)/i,
+    whole: /^(mejor no|d[eé]jalo|ya no quiero|olvidalo)$/i,
+  },
+];
+
+// Strips trailing/leading politeness and punctuation so a `whole` pattern
+// still fires on "no more, thanks" or "por favor ya está".
+function coreMessage(rawMsg) {
+  return String(rawMsg || '')
+    .toLowerCase()
+    .replace(/[¿?¡!.,;]/g, ' ')
+    .replace(/\b(please|thanks|thank you|pls|por ?favor|gracias|ok|okay)\b/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function resolveNaturalCommand(rawMsg) {
+  // The bare keywords and button ids are matched by the existing handlers
+  // before this ever runs — this is purely the "customer never learned the
+  // commands" fallback.
+  if (REPEAT_RE.test(rawMsg)) return 'repeat';
+  const core = coreMessage(rawMsg);
+  for (const { cmd, re, whole } of NATURAL_COMMANDS) {
+    if (re && re.test(rawMsg)) return cmd;
+    if (whole && whole.test(core)) return cmd;
+  }
+  return null;
+}
+
 // ---- FLAVOR / CRAVING RECOMMENDATIONS ----
 // "anything mango?", "I want something cheesy", "algo de chocolate" — a
 // craving rather than a specific item. Matches loosely against the words in
@@ -2918,7 +3031,7 @@ async function processWhatsAppMessage(message, res) {
     // entendí eso". Normalizing rawMsg itself (not just `msg`) also keeps
     // stored notes/addresses in one consistent form.
     rawMsg = rawMsg.normalize('NFC');
-    const msg = rawMsg.toLowerCase();
+    let msg = rawMsg.toLowerCase();
     const isFreeform = message.type === 'text' || message.type === 'audio'; // structured button/list taps don't carry frustration signals the same way
 
     console.log(`Message from ${from}: ${rawMsg}`);
@@ -3016,6 +3129,39 @@ async function processWhatsAppMessage(message, res) {
         // Don't return — let the normal "menu"/global handling below run too.
       } else {
         return sendReply(res, from, resumeChoiceMessage(lang, t.resumeOffer));
+      }
+    }
+
+    // ---- NATURAL-LANGUAGE COMMAND FALLBACK ----
+    // Maps prose like "eso es todo" or "where's my order" onto the canonical
+    // keyword the handlers below already accept, for customers who never
+    // read the command glossary. Placed HERE deliberately: after the resume
+    // offer (so a "yes"/"menu" answer to it isn't reinterpreted) but before
+    // help/agent/status/menu, which are global commands — resolving any
+    // later would leave those unreachable by prose.
+    //
+    // Only at the browsing steps: everywhere else free text is the answer to
+    // a specific question, and treating it as a command would swallow real
+    // content (the same class of bug that once saved a note as an address).
+    // Skipped for interactive taps and bare numbers, which are unambiguous
+    // already — so this can only ADD understanding, never change existing
+    // behavior.
+    if ((session.step === 'menu' || session.step === 'item')
+      && message.type !== 'interactive' && !/^\d+$/.test(msg)) {
+      const natural = resolveNaturalCommand(rawMsg);
+      if (natural && natural !== msg) {
+        console.log(`Natural-language command: "${rawMsg}" -> ${natural}`);
+        msg = natural;
+        // 'cancel' is handled by a global check that already ran above, so
+        // the prose form has to be honoured here instead of falling through
+        // to a step handler that doesn't know the word.
+        if (msg === 'cancel') {
+          delete savedCarts[from];
+          resetSessionKeepingLanguage(from);
+          return sendReply(res, from, lang === 'es'
+            ? 'Orden cancelada ❌. Escribe *menú* para empezar de nuevo.'
+            : 'Order cancelled ❌. Type *menu* to start over.');
+        }
       }
     }
 

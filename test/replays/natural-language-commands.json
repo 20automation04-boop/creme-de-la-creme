@@ -1,0 +1,18 @@
+{
+  "name": "natural-language-commands-and-false-positive-guards",
+  "from": "19990000029",
+  "turns": [
+    { "in": "1", "expectStep": "menu" },
+
+    { "comment": "NEGATIVES: order text containing command fragments must NOT be treated as a command", "in": "2 hot dogs no more onions", "expectStep": "menu", "expectCartLength": 1 },
+    { "in": "whats in my cart", "expectStep": "menu", "expectCartLength": 1, "expectReplyContains": "Your order" },
+
+    { "comment": "prose checkout", "in": "thats all", "expectStep": "mode" },
+    { "in": "back", "expectStep": "menu" },
+
+    { "comment": "prose menu + help", "in": "show me the menu", "expectStep": "menu" },
+    { "in": "how does this work", "expectStep": "menu", "expectReplyContains": "How to order" },
+
+    { "comment": "prose cancel wipes the cart", "in": "never mind", "expectCartLength": 0, "expectReplyContains": "cancelled" }
+  ]
+}
