@@ -1382,6 +1382,7 @@ Need help? Type *help* anytime.`,
     invalidSize: 'Can you double check that size number and try again?',
     askNotes: 'Any special requests for this item? (extra ice, no onions, etc.) Type *none* if not.',
     noneButtonTitle: 'None ✅',
+    helpButtonTitle: 'How to order 💡',
     cartEmptyCheckout: "Cart's empty — pick something first!",
     cartFull: `Your cart's got a LOT going on already (${MAX_CART_LINES} different items!) — let's get this order checked out before adding more. Type *done* whenever you're ready!`,
     askMode: (fee) => `Pickup 📦 or delivery 🏍️? (Delivery is $${fee} BZD)`,
@@ -1478,6 +1479,7 @@ Need help? Type *help* anytime.`,
     invalidSize: '¿Puedes revisar el número de tamaño e intentar de nuevo?',
     askNotes: '¿Alguna petición especial para este artículo? (extra hielo, sin cebolla, etc.) Escribe *ninguno* si no.',
     noneButtonTitle: 'Ninguna ✅',
+    helpButtonTitle: 'Cómo ordenar 💡',
     cartEmptyCheckout: '¡Carrito vacío, elige algo primero!',
     cartFull: `Tu carrito ya tiene bastante (¡${MAX_CART_LINES} artículos distintos!) — finalicemos esta orden antes de añadir más. ¡Escribe *listo* cuando estés listo!`,
     askMode: (fee) => `¿Recoger 📦 o entrega 🏍️? (La entrega cuesta $${fee} BZD)`,
@@ -2024,13 +2026,22 @@ const REPEAT_RE = new RegExp([
 const NATURAL_COMMANDS = [
   // Order status — needs a "where/ready/how's it going" cue so it can't
   // steal plain "my order" from the cart lookup below.
-  { cmd: 'status', re: /\b(where('?s| is)?\s*(my|the)\s*(order|food)|is (my|the) (order|food) (ready|done|coming)|how('?s| is) my (order|food)|track (my )?order|order status)\b|\b(d[oó]nde (est[aá]|va) mi (orden|pedido|comida)|c[oó]mo va mi (orden|pedido)|estado de mi (orden|pedido)|ya est[aá] (lista|listo) mi (orden|pedido))/i },
+  {
+    cmd: 'status',
+    re: /\b(where('?s| is)?\s*(my|the)\s*(order|food)|is (my|the) (order|food) (ready|done|coming)|how('?s| is| long for) (my|the) (order|food)|track (my )?order|order status|what happened (to|with) (my|the) (order|food)|any (update|news) (on|about) (my|the) (order|food)|when (will|is|does) (my|the) (order|food)|how long (until|for|till)|status of (my|the) order)\b|\b(d[oó]nde (est[aá]|va|anda) mi (orden|pedido|comida)|c[oó]mo va mi (orden|pedido)|estado de mi (orden|pedido)|ya (est[aá] (lista|listo)|viene|sali[oó])|qu[eé] pas[oó] con mi (orden|pedido)|hay (novedades|noticias|alguna novedad)|cu[aá]ndo (llega|estar[aá]|sale)|cu[aá]nto (falta|tarda|demora))/i,
+  },
 
   // Human handoff.
   { cmd: 'agent', re: /\b(real (person|human)|talk to (a |an )?(human|person|someone|agent)|speak (to|with) (a |an )?(human|person|someone)|customer service)\b|\b(persona real|hablar con (alguien|una persona|un humano)|servicio al cliente)/i },
 
   // Cart contents.
-  { cmd: 'cart', re: /\b(what('?s| is| do i have)?\s*(in )?(my|the) (cart|order|basket)|show (me )?(my|the) (cart|order)|see (my|the) (cart|order)|my cart|check (my )?cart|how much (is it|do i owe)|what did i order)\b|\b(qu[eé] (tengo|llevo) (en el carrito|hasta ahora)|ver (mi|el) (carrito|orden|pedido)|mi carrito|cu[aá]nto (es|va|llevo)|mu[eé]strame mi (orden|carrito))/i },
+  {
+    cmd: 'cart',
+    re: /\b(what('?s| is| was| do i have)?\s*(in )?(my|the) (cart|order|basket)|show (me )?(my|the) (cart|order)|see (my|the) (cart|order)|my cart|check (my )?cart|how much (is it|do i owe|so far)|what did i (order|get|add|ask for)|review (my )?order)\b|\b(qu[eé] (tengo|llevo)( en el carrito| hasta ahora)?|ver (mi|el) (carrito|orden|pedido)|mi carrito|cu[aá]nto (es|va|llevo)|mu[eé]strame (mi|el) (orden|carrito|pedido)|cu[aá]l (fue|es) mi (orden|pedido)|qu[eé] (ped[ií]|orden[eé]|agregu[eé]))/i,
+    // Bare "my order" / "mi pedido" with nothing else — unambiguous on its
+    // own, but far too common inside longer sentences to trust anywhere.
+    whole: /^(my (order|cart)|mi (orden|pedido|carrito)|el pedido|la orden)$/i,
+  },
 
   // Checkout. Note "no more"/"nada más"/"ya está" live in `whole` only —
   // they're extremely common mid-order ("no more onions").
@@ -2361,6 +2372,30 @@ function confirmButtonsMessage(bodyText, lang) {
 // as plain text) — the button's id 'none' lands in that same check because
 // interactive taps set rawMsg to the tapped id (see extractInboundMessage),
 // so no new routing logic was needed here.
+// Shown the FIRST time the bot doesn't understand something, instead of the
+// old text-only reply that told the customer to "type *help*" — the exact
+// thing a stuck customer won't do. Both ids ('help', 'menu') are already
+// global commands, so a tap routes with no new logic, and it works even if
+// tapped much later from an older message.
+//
+// Deliberately no "talk to a person" button here: that pings real staff, and
+// the frustration ladder already offers it once someone is genuinely stuck
+// (see stopGuessing). One bad parse shouldn't route a customer to a human.
+function stuckHelpMessage(lang) {
+  const t = TXT[lang];
+  const body = `${t.notUnderstood}\n\n${t.humanHelp(SHOP_INFO.phone)}`;
+  return {
+    buttons: {
+      body,
+      buttons: [
+        { id: 'help', title: t.helpButtonTitle },
+        { id: 'menu', title: t.menuButtonTitle },
+      ],
+    },
+    fallback: body,
+  };
+}
+
 function notesButtonsMessage(lang) {
   const t = TXT[lang];
   const body = t.askNotes;
@@ -3408,7 +3443,7 @@ async function processWhatsAppMessage(message, res) {
               reply = recommendationMessage(hits, lang);
             } else {
               parseFailed = true;
-              reply = `${t.notUnderstood}\n\n${t.humanHelp(SHOP_INFO.phone)}`;
+              reply = stuckHelpMessage(lang);
             }
           }
         }
