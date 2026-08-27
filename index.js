@@ -1312,15 +1312,17 @@ const TXT = {
     // be a reference manual; the full list is one *help* away.
     howToOrderShort: () => `🍧 *Créme De La Créme* 🍧
 
-*How to order:*
-1️⃣ Reply with a category number to browse
-2️⃣ Type it out, or send a voice note 🎙️ — e.g. "2 hot dogs, no onion, and a large mango smoothie, extra ice." Speaking clearly helps us catch every detail!
-3️⃣ Ask us anything — hours, delivery, payment methods
-4️⃣ Add more items any time, even mid-order — nothing locks in until you confirm ✅
+Ordering is easy! 🎉
 
-🏍️ Delivery available in ${SHOP_INFO.deliveryAreasEn} (${SHOP_INFO.deliveryTimeEn}) — or pick up in-store 📦
+1️⃣ Tap *View Menu* below 👇
+2️⃣ Tap what you want
+3️⃣ Tap *Done* ✅ when you're ready
 
-Type *help* anytime to see all commands (cart, status, cancel, and more).`,
+Prefer to type, or send a voice note 🎙️? That works too — just tell us what you want!
+
+🏍️ We deliver in ${SHOP_INFO.deliveryAreasEn} (${SHOP_INFO.deliveryTimeEn}) — or pick up in-store 📦
+
+Need help? Type *help* anytime.`,
     howToOrder: () => `🍧 *Créme De La Créme* 🍧
 
 *How to order:*
@@ -1407,15 +1409,17 @@ Type *help* anytime to see all commands (cart, status, cancel, and more).`,
     // corta para el primer contacto, la lista completa de comandos vive en *help*.
     howToOrderShort: () => `🍧 *Créme De La Créme* 🍧
 
-*Cómo ordenar:*
-1️⃣ Responde con el número de una categoría para explorar
-2️⃣ Escríbelo, o envía una nota de voz 🎙️ — ej. "2 hot dogs, sin cebolla, y un smoothie grande de mango, con hielo extra." ¡Hablar claro nos ayuda a captar cada detalle!
-3️⃣ Pregúntanos lo que sea — horario, entregas, formas de pago
-4️⃣ Añade más artículos cuando quieras, incluso a mitad de la orden — nada queda fijo hasta que confirmes ✅
+¡Ordenar es fácil! 🎉
 
-🏍️ Entrega disponible en ${SHOP_INFO.deliveryAreasEs} (${SHOP_INFO.deliveryTimeEs}) — o recoge en tienda 📦
+1️⃣ Toca *Ver Menú* abajo 👇
+2️⃣ Toca lo que quieras
+3️⃣ Toca *Listo* ✅ cuando estés listo
 
-Escribe *help* cuando quieras para ver todos los comandos (cart, status, cancel, y más).`,
+¿Prefieres escribir, o enviar una nota de voz 🎙️? ¡Eso también funciona — solo dinos qué quieres!
+
+🏍️ Entregamos en ${SHOP_INFO.deliveryAreasEs} (${SHOP_INFO.deliveryTimeEs}) — o recoge en tienda 📦
+
+¿Necesitas ayuda? Escribe *help* cuando quieras.`,
     howToOrder: () => `🍧 *Créme De La Créme* 🍧
 
 *Cómo ordenar:*
