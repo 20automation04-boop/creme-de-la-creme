@@ -1343,7 +1343,7 @@ Need help? Type *help* anytime.`,
 *status* = check your last order's status
 *agent* = talk to a real person
 *help* = show these instructions again
-*language* = change language`,
+*lang* = change language`,
     menuButtonPrompt: 'Tap below whenever you\'re ready to see the menu 👇',
     menuButtonTitle: 'View Menu 📋',
     mainMenu: (menuList) => `🍧 *Créme De La Créme* 🍧\nReply with a number, or type your order:\n\n${menuList}\n\n*cart* = view order   *done* = checkout   *help* = instructions`,
@@ -1419,7 +1419,7 @@ Need help? Type *help* anytime.`,
 
 🏍️ Entregamos en ${SHOP_INFO.deliveryAreasEs} (${SHOP_INFO.deliveryTimeEs}) — o recoge en tienda 📦
 
-¿Necesitas ayuda? Escribe *help* cuando quieras.`,
+¿Necesitas ayuda? Escribe *ayuda* cuando quieras.`,
     howToOrder: () => `🍧 *Créme De La Créme* 🍧
 
 *Cómo ordenar:*
@@ -1430,20 +1430,20 @@ Need help? Type *help* anytime.`,
 
 🏍️ Entrega disponible en ${SHOP_INFO.deliveryAreasEs} (${SHOP_INFO.deliveryTimeEs}) — o recoge en tienda 📦
 
-*cart* = ver tu orden
-*repeat* = repetir tu última orden
-*done* = finalizar
-*back* = volver un paso
-*cancel* = cancelar tu orden
+*carrito* = ver tu orden
+*repetir* = repetir tu última orden
+*listo* = finalizar
+*atrás* = volver un paso
+*cancelar* = cancelar tu orden
 *cancelar orden* = cancelar una orden recién hecha (hasta 3 min)
 *nota <texto>* = guardar una nota de alergia/preferencia para la próxima vez
-*status* = ver el estado de tu última orden
-*agent* = hablar con una persona real
-*help* = ver estas instrucciones otra vez
-*language* = cambiar idioma`,
+*estado* = ver el estado de tu última orden
+*agente* = hablar con una persona real
+*ayuda* = ver estas instrucciones otra vez
+*idioma* = cambiar idioma`,
     menuButtonPrompt: 'Toca abajo cuando quieras ver el menú 👇',
     menuButtonTitle: 'Ver Menú 📋',
-    mainMenu: (menuList) => `🍧 *Créme De La Créme* 🍧\nResponde con un número, o escribe tu orden:\n\n${menuList}\n\n*cart* = ver orden   *done* = finalizar   *help* = instrucciones`,
+    mainMenu: (menuList) => `🍧 *Créme De La Créme* 🍧\nResponde con un número, o escribe tu orden:\n\n${menuList}\n\n*carrito* = ver orden   *listo* = finalizar   *ayuda* = instrucciones`,
     cartEmpty: 'Tu carrito está vacío.',
     cartHeader: '🛒 *Tu orden:*',
     cartTotal: (t) => `*Total: $${t}*`,
@@ -1459,7 +1459,7 @@ Need help? Type *help* anytime.`,
     askNotes: '¿Alguna petición especial para este artículo? (extra hielo, sin cebolla, etc.) Escribe *ninguno* si no.',
     noneButtonTitle: 'Ninguna ✅',
     cartEmptyCheckout: '¡Carrito vacío, elige algo primero!',
-    cartFull: `Tu carrito ya tiene bastante (¡${MAX_CART_LINES} artículos distintos!) — finalicemos esta orden antes de añadir más. ¡Escribe *done* cuando estés listo!`,
+    cartFull: `Tu carrito ya tiene bastante (¡${MAX_CART_LINES} artículos distintos!) — finalicemos esta orden antes de añadir más. ¡Escribe *listo* cuando estés listo!`,
     askMode: (fee) => `¿Recoger 📦 o entrega 🏍️? (La entrega cuesta $${fee} BZD)`,
     pickupConfirm: '📦 Orden para recoger. ¿Confirmas? (si/no)',
     askAddress: (fee) => `🏍️ ¿Cuál es la dirección de entrega 📍 y un número de contacto?\n(Costo de entrega: $${fee} BZD)`,
@@ -1467,11 +1467,11 @@ Need help? Type *help* anytime.`,
     askModeInvalid: '¿Recoger o entrega — cuál prefieres?',
     orderConfirmed: (num, phone) => `🎉 ¡Orden #${num} confirmada! ¡Gracias!\n\nNos pondremos en contacto pronto.\n\n📞 ¿Necesitas algo más? Llámanos al ${phone}.`,
     orderConfirmedPreorder: (num, phone, nextOpen) => `🎉 ¡Pre-pedido #${num} recibido! ¡Gracias!\n\nEstamos cerrados ahora, pero empezaremos apenas abramos ${nextOpen}.\n\n📞 ¿Necesitas algo más? Llámanos al ${phone}.`,
-    orderCancelled: 'Sin problema — orden cancelada. Escribe *menu* si quieres empezar una nueva.',
+    orderCancelled: 'Sin problema — orden cancelada. Escribe *menú* si quieres empezar una nueva.',
     confirmInvalid: '¿Sí para confirmar, o no para cancelar?',
-    notUnderstood: 'No entendí eso — intenta un número del menú, o escribe *help* para instrucciones.',
+    notUnderstood: 'No entendí eso — intenta un número del menú, o escribe *ayuda* para instrucciones.',
     humanHelp: (phone) => `📞 ¿Necesitas hablar con alguien? Llámanos al ${phone}.`,
-    askConfirmNudge: "🧾 ¿Quieres añadir algo más? Escribe *menu* para ver otras categorías, o *done* cuando estés listo para finalizar!",
+    askConfirmNudge: "🧾 ¿Quieres añadir algo más? Escribe *menú* para ver otras categorías, o *listo* cuando estés listo para finalizar!",
     doneButtonTitle: 'Listo ✅',
     closedBanner: (hours, nextOpen) => `😴 *Estamos cerrados en este momento.*\nHorario: ${hours}\nAbrimos de nuevo ${nextOpen}.\n\n✅ Aún puedes hacer un pre-pedido — ¡empezaremos apenas abramos!\n\n`,
     soldOutItem: (name, substitute) => `😔 Lo sentimos, ${name} está agotado en este momento.${substitute ? ` ¿Qué tal ${substitute} en su lugar? 😋` : ''}`,
@@ -1479,17 +1479,17 @@ Need help? Type *help* anytime.`,
     idleStillThere: '👋 ¿Sigues ahí? Tu carrito está guardado para cuando quieras continuar.',
     idleConfirmPrompt: '🧾 ¿Listo para confirmar esta orden? Responde *SI* para confirmar.',
     idleHold: '⏳ Todavía tenemos tu orden guardada — la mantendremos unos 20 minutos más.',
-    idleExpired: '🕐 No queríamos seguir molestándote, ¡así que guardamos tu carrito! ¿Quieres continuar donde lo dejaste? Responde *SI* para continuar, o escribe *MENU* para empezar de nuevo.',
-    resumeOffer: '👋 ¿Quieres continuar tu orden anterior? Responde *SI* para continuar, o escribe *MENU* para empezar de nuevo.',
+    idleExpired: '🕐 No queríamos seguir molestándote, ¡así que guardamos tu carrito! ¿Quieres continuar donde lo dejaste? Responde *SI* para continuar, o escribe *MENÚ* para empezar de nuevo.',
+    resumeOffer: '👋 ¿Quieres continuar tu orden anterior? Responde *SI* para continuar, o escribe *MENÚ* para empezar de nuevo.',
     resumeRestored: (cart) => `✅ ¡Bienvenido de nuevo! Tu carrito fue restaurado:\n\n${cart}`,
     agentRequested: (phone) => `📞 Listo — te estamos conectando con nuestro equipo, alguien se comunicará pronto. También puedes llamarnos directamente al ${phone}.`,
     statusReply: (num, status) => `📦 Orden #${num}: *${status}*`,
     statusUnavailable: (phone) => `Lo sentimos, no pudimos consultar el estado de tu orden ahora — por favor llámanos al ${phone}.`,
-    stopGuessing: '🤔 Intentemos de otra forma — toca una opción abajo, o escribe *agent* para hablar con una persona real.',
+    stopGuessing: '🤔 Intentemos de otra forma — toca una opción abajo, o escribe *agente* para hablar con una persona real.',
     frustrationSoften: '😊 Disculpa el ir y venir — vamos a resolver esto.',
-    frustrationShortcut: '¿Quieres que nuestro equipo te llame en vez de esto? Escribe *agent* cuando quieras.',
+    frustrationShortcut: '¿Quieres que nuestro equipo te llame en vez de esto? Escribe *agente* cuando quieras.',
     cancelWindowClosed: (phone) => `Lo sentimos, la ventana de 3 minutos para cancelar tu orden ya cerró — llámanos al ${phone} si necesitas hacer cambios.`,
-    orderCancelledConfirmed: (num) => `❌ La orden #${num} fue cancelada. Escribe *menu* si quieres hacer una nueva.`,
+    orderCancelledConfirmed: (num) => `❌ La orden #${num} fue cancelada. Escribe *menú* si quieres hacer una nueva.`,
     cancelOrderNotFound: (phone) => `Lo sentimos, no pudimos encontrar esa orden para cancelar — por favor llámanos al ${phone}.`,
     savedAddressOffer: (addr) => `📍 ¿Usar tu dirección guardada?\n${addr}`,
     savedAddressUseIt: 'Usar dirección guardada',
@@ -1498,7 +1498,7 @@ Need help? Type *help* anytime.`,
     reorderUsualPrompt: '¿Repetir lo de siempre? 🔁',
     abandonedCartRecovery: (percent) => `🎁 ¿Todavía lo estás pensando? Tu carrito sigue guardado — regresa pronto y obtén *${percent}% de descuento* en esta orden. ¡Solo responde *SI* y se aplica automáticamente!`,
     discountApplied: (percent) => `🎉 ¡Descuento del ${percent}% aplicado!`,
-    ordersPausedMsg: '😔 No podemos tomar pedidos nuevos por un momento — tu carrito está guardado, solo escribe *done* otra vez en un rato para finalizar.',
+    ordersPausedMsg: '😔 No podemos tomar pedidos nuevos por un momento — tu carrito está guardado, solo escribe *listo* otra vez en un rato para finalizar.',
     duplicateOrderWarning: (num) => `⚠️ Un momento — hiciste la orden #${num} hace un par de minutos. ¿Seguro que quieres hacer *otra* orden? Responde *si* otra vez para confirmar.`,
   },
 };
@@ -2635,8 +2635,8 @@ async function processWhatsAppMessage(message, res) {
         const transcript = await transcribeVoiceNote(mediaId, mimeType);
         if (!transcript) {
           return sendReply(res, from, bilingual(
-            "Sorry, I couldn't understand that voice message — could you try typing it, or record again? 🙏",
-            'Lo sentimos, no pude entender el mensaje de voz — ¿puedes escribirlo o grabar de nuevo? 🙏'
+            "Sorry, I couldn't quite catch that — could you try speaking slowly and clearly, or just type it instead? 🙏",
+            'Lo sentimos, no logré entender bien eso — ¿puedes hablar despacio y claro, o prefieres escribirlo? 🙏'
           ));
         }
         rawMsg = transcript;
@@ -2682,7 +2682,7 @@ async function processWhatsAppMessage(message, res) {
       delete savedCarts[from];
       sessions[from] = newSession();
       return sendReply(res, from, lang === 'es'
-        ? 'Orden cancelada ❌. Escribe *menu* para empezar de nuevo.'
+        ? 'Orden cancelada ❌. Escribe *menú* para empezar de nuevo.'
         : 'Order cancelled ❌. Type *menu* to start over.');
     }
 
@@ -2753,7 +2753,7 @@ async function processWhatsAppMessage(message, res) {
         if (saved.discountEligible) bits.push(t.discountApplied(ABANDONED_CART_DISCOUNT_PERCENT));
         bits.push(t.resumeRestored(cartText(session.cart, lang)));
         return sendReply(res, from, [bits.join('\n\n'), ...categoryListMessages(lang)]);
-      } else if (msg === 'menu' || msg === 'no' || msg === 'cancel' || msg === 'cancelar') {
+      } else if (msg === 'menu' || msg === 'menú' || msg === 'no' || msg === 'cancel' || msg === 'cancelar') {
         session.pendingResume = false;
         delete savedCarts[from];
         // Don't return — let the normal "menu"/global handling below run too.
@@ -2851,7 +2851,7 @@ async function processWhatsAppMessage(message, res) {
       return sendReply(res, from, t.noteSaved);
     }
 
-    if (msg === 'hola' || msg === 'hi' || msg === 'hello' || msg === 'menu' || msg === 'start') {
+    if (msg === 'hola' || msg === 'hi' || msg === 'hello' || msg === 'menu' || msg === 'menú' || msg === 'start') {
       session.step = 'menu';
       const messages = [withClosedBanner('', lang), ...categoryListMessages(lang)];
       if (session.cart.length === 0 && lastOrders[from] && lastOrders[from].cart && lastOrders[from].cart.length > 0) {
@@ -3014,7 +3014,7 @@ async function processWhatsAppMessage(message, res) {
       case 'item': {
         const cat = MENU.find(c => c.id === session.currentCategory);
 
-        if (msg === '0' || msg === 'atras' || msg === 'back') {
+        if (msg === '0' || msg === 'atras' || msg === 'atrás' || msg === 'back') {
           session.step = 'menu';
           reply = categoryListMessages(lang);
           break;
@@ -3109,7 +3109,7 @@ async function processWhatsAppMessage(message, res) {
         const item = session.pendingItem;
         const cat = MENU.find(c => c.id === session.currentCategory);
 
-        if (msg === '0' || msg === 'atras' || msg === 'back') {
+        if (msg === '0' || msg === 'atras' || msg === 'atrás' || msg === 'back') {
           session.pendingItem = null;
           session.pendingSize = null;
           session.step = 'item';
@@ -3146,7 +3146,7 @@ async function processWhatsAppMessage(message, res) {
       case 'quantity': {
         const cat = MENU.find(c => c.id === session.currentCategory);
 
-        if (msg === '0' || msg === 'atras' || msg === 'back') {
+        if (msg === '0' || msg === 'atras' || msg === 'atrás' || msg === 'back') {
           session.pendingItem = null;
           session.pendingSize = null;
           session.step = 'item';
@@ -3191,7 +3191,7 @@ async function processWhatsAppMessage(message, res) {
         const name = size ? `${item.name} (${size.label})` : item.name;
         const price = size ? size.price : item.price;
 
-        if (msg === 'atras' || msg === 'back') {
+        if (msg === 'atras' || msg === 'atrás' || msg === 'back') {
           // NOTE: '0' is deliberately excluded here — it already means "no
           // note" for this step (see noNoteWords below), so treating it as
           // "go back" too would silently break that existing shorthand.
@@ -3232,7 +3232,7 @@ async function processWhatsAppMessage(message, res) {
       }
 
       case 'mode': {
-        if (msg === '0' || msg === 'atras' || msg === 'back') {
+        if (msg === '0' || msg === 'atras' || msg === 'atrás' || msg === 'back') {
           session.step = 'menu';
           reply = [cartText(session.cart, lang), ...categoryListMessages(lang)];
           break;
@@ -3267,7 +3267,7 @@ async function processWhatsAppMessage(message, res) {
       }
 
       case 'address': {
-        if (msg === '0' || msg === 'atras' || msg === 'back') {
+        if (msg === '0' || msg === 'atras' || msg === 'atrás' || msg === 'back') {
           session.step = 'mode';
           reply = modeButtonsMessage(SHOP_INFO.deliveryFee, lang);
           break;
@@ -3298,7 +3298,7 @@ async function processWhatsAppMessage(message, res) {
       }
 
       case 'confirm': {
-        if (msg === '0' || msg === 'atras' || msg === 'back') {
+        if (msg === '0' || msg === 'atras' || msg === 'atrás' || msg === 'back') {
           session.step = session.mode === 'delivery' ? 'address' : 'mode';
           reply = session.mode === 'delivery' ? t.askAddress(SHOP_INFO.deliveryFee) : modeButtonsMessage(SHOP_INFO.deliveryFee, lang);
           break;

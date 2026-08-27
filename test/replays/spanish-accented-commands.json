@@ -1,0 +1,11 @@
+{
+  "name": "spanish-accented-commands-and-glossary",
+  "from": "19990000021",
+  "turns": [
+    { "in": "2", "expectStep": "menu" },
+    { "in": "1", "expectStep": "item" },
+    { "in": "atrás", "expectStep": "menu" },
+    { "in": "1", "expectStep": "item" },
+    { "in": "menú", "expectStep": "menu" }
+  ]
+}
