@@ -1383,6 +1383,7 @@ Need help? Type *help* anytime.`,
     askNotes: 'Any special requests for this item? (extra ice, no onions, etc.) Type *none* if not.',
     noneButtonTitle: 'None ✅',
     helpButtonTitle: 'How to order 💡',
+    quickCommands: 'You can also just type:\n*menu* — see the menu\n*cart* — see your order\n*done* — checkout\n*repeat* — reorder your last order\n*agent* — talk to a person',
     cartEmptyCheckout: "Cart's empty — pick something first!",
     cartFull: `Your cart's got a LOT going on already (${MAX_CART_LINES} different items!) — let's get this order checked out before adding more. Type *done* whenever you're ready!`,
     askMode: (fee) => `Pickup 📦 or delivery 🏍️? (Delivery is $${fee} BZD)`,
@@ -1480,6 +1481,7 @@ Need help? Type *help* anytime.`,
     askNotes: '¿Alguna petición especial para este artículo? (extra hielo, sin cebolla, etc.) Escribe *ninguno* si no.',
     noneButtonTitle: 'Ninguna ✅',
     helpButtonTitle: 'Cómo ordenar 💡',
+    quickCommands: 'También puedes escribir:\n*menú* — ver el menú\n*carrito* — ver tu orden\n*listo* — finalizar\n*repetir* — repetir tu última orden\n*agente* — hablar con una persona',
     cartEmptyCheckout: '¡Carrito vacío, elige algo primero!',
     cartFull: `Tu carrito ya tiene bastante (¡${MAX_CART_LINES} artículos distintos!) — finalicemos esta orden antes de añadir más. ¡Escribe *listo* cuando estés listo!`,
     askMode: (fee) => `¿Recoger 📦 o entrega 🏍️? (La entrega cuesta $${fee} BZD)`,
@@ -2077,6 +2079,24 @@ function coreMessage(rawMsg) {
     .trim();
 }
 
+// LAST tier, tried only when no phrase pattern above matched: does the
+// message simply CONTAIN a command word? "cambia algo en mi carrito" isn't a
+// phrasing anyone anticipated, but the word "carrito" says plainly enough
+// what they want to look at.
+//
+// Restricted on purpose to commands that are read-only or a handoff. A fuzzy
+// keyword hit must never be able to check out, cancel an order, or refill a
+// cart — the cost of guessing wrong there is real money, whereas guessing
+// wrong here shows someone their cart when they wanted something else.
+// 'done', 'cancel' and 'repeat' are therefore deliberately absent.
+const KEYWORD_HINTS = [
+  { cmd: 'cart', re: /\b(cart|basket|carrito|canasta)\b/i },
+  { cmd: 'status', re: /\b(status|estado)\b/i },
+  { cmd: 'agent', re: /\b(agent|human|agente|humano|persona)\b/i },
+  { cmd: 'help', re: /\b(help|ayuda|instructions|instrucciones)\b/i },
+  { cmd: 'menu', re: /\b(menu|men[uú])\b/i },
+];
+
 function resolveNaturalCommand(rawMsg) {
   // The bare keywords and button ids are matched by the existing handlers
   // before this ever runs — this is purely the "customer never learned the
@@ -2086,6 +2106,9 @@ function resolveNaturalCommand(rawMsg) {
   for (const { cmd, re, whole } of NATURAL_COMMANDS) {
     if (re && re.test(rawMsg)) return cmd;
     if (whole && whole.test(core)) return cmd;
+  }
+  for (const { cmd, re } of KEYWORD_HINTS) {
+    if (re.test(rawMsg)) return cmd;
   }
   return null;
 }
@@ -2383,7 +2406,11 @@ function confirmButtonsMessage(bodyText, lang) {
 // (see stopGuessing). One bad parse shouldn't route a customer to a human.
 function stuckHelpMessage(lang) {
   const t = TXT[lang];
-  const body = `${t.notUnderstood}\n\n${t.humanHelp(SHOP_INFO.phone)}`;
+  // Show the actual commands inline, not just a pointer to *help* — if we've
+  // got this far the customer has already typed something we couldn't read,
+  // so telling them to type another word they don't know is a dead end.
+  // Kept to the handful that matter; the full glossary is behind the button.
+  const body = `${t.notUnderstood}\n\n${t.quickCommands}\n\n${t.humanHelp(SHOP_INFO.phone)}`;
   return {
     buttons: {
       body,
@@ -4162,6 +4189,7 @@ const KITCHEN_HTML = `<!doctype html>
   button:disabled { opacity:.45; cursor:default; }
   button.go { background:var(--ready); color:#04210f; border-color:transparent; }
   button.warn { background:#3a2020; color:#ffc9c9; border-color:#5a2b2b; }
+  button.msg { background:#1e2f3f; color:#bfe0ff; border-color:#2b4a63; }
   .empty { color:var(--dim); text-align:center; padding:70px 20px; grid-column:1/-1; }
   #login { max-width:340px; margin:16vh auto; padding:26px; background:var(--card);
            border:1px solid var(--line); border-radius:12px; }
@@ -4228,6 +4256,19 @@ function setStatus(rowNum, orderNumber, status, btn){
     .catch(function(e){ alert(e.message); btn.disabled = false; });
 }
 
+function messageCustomer(rowNum, orderNumber, btn){
+  var text = prompt('Message to the customer for order #' + orderNumber + ':\\n\\n(e.g. "the one marked [P] has pepper")');
+  if (text === null) return;
+  text = text.trim();
+  if (!text) return;
+  btn.disabled = true;
+  fetch('/kitchen/message', { method:'POST', headers:{'Content-Type':'application/json'},
+                              body: JSON.stringify({ rowNum: rowNum, orderNumber: orderNumber, text: text }) })
+    .then(function(r){ return r.json().then(function(j){ if(!r.ok) throw new Error(j.error||'failed'); }); })
+    .then(function(){ btn.textContent = 'Sent ✓'; setTimeout(function(){ btn.textContent = '💬 Message'; btn.disabled = false; }, 2500); })
+    .catch(function(e){ alert(e.message); btn.disabled = false; });
+}
+
 function card(o){
   var short = o.status === 'Ready for Pickup' ? 'Ready'
             : o.status === 'Out for Delivery' ? 'Out' : o.status;
@@ -4257,6 +4298,13 @@ function card(o){
     b.onclick = function(){ setStatus(o.rowNum, o.orderNumber, pair[0], b); };
     btns.appendChild(b);
   });
+  if (o.phone) {
+    var mb = document.createElement('button');
+    mb.textContent = '💬 Message';
+    mb.className = 'msg';
+    mb.onclick = function(){ messageCustomer(o.rowNum, o.orderNumber, mb); };
+    btns.appendChild(mb);
+  }
   return d;
 }
 
@@ -4298,6 +4346,45 @@ document.getElementById('pw').addEventListener('keydown', function(e){
 </script>
 </body>
 </html>`;
+
+// Staff-to-customer message, e.g. "the one marked [P] has pepper", "we're
+// out of pickles — is mayo okay?". Free text written by a human and sent to
+// a real customer, so it's fenced in carefully:
+//   - same auth + row-verification as the status route, so a shifted sheet
+//     row can't send one customer's message to a different customer
+//   - prefixed with the shop name so it never reads like a stranger texting
+//   - length-capped, matching how customer-supplied text is treated
+//   - logged, since there's no other record of what staff sent
+const MAX_KITCHEN_NOTE_LENGTH = 600;
+
+app.post('/kitchen/message', async (req, res) => {
+  if (!requireKitchenAuth(req, res)) return;
+  const { rowNum, orderNumber, text } = req.body || {};
+  const body = String(text || '').trim();
+  if (!body) return res.status(400).json({ error: 'empty message' });
+  if (!Number.isInteger(rowNum) || rowNum < 2) return res.status(400).json({ error: 'bad row' });
+
+  try {
+    const rows = await fetchManagerRows();
+    const current = rows[rowNum - 2];
+    if (!current || String(current[0]) !== String(orderNumber)) {
+      return res.status(409).json({ error: 'This order moved in the sheet — refresh and try again.' });
+    }
+    const phone = String(current[6] || '').replace(/^\+/, '');
+    if (!phone) return res.status(400).json({ error: 'No phone number on file for this order.' });
+
+    const lang = current[5] === 'es' ? 'es' : 'en';
+    const header = lang === 'es'
+      ? `💬 *Créme De La Créme* — sobre tu orden #${orderNumber}:`
+      : `💬 *Créme De La Créme* — about your order #${orderNumber}:`;
+    await sendWhatsAppMessage(phone, `${header}\n\n${body.slice(0, MAX_KITCHEN_NOTE_LENGTH)}`);
+    console.log(`Kitchen dashboard: message sent to order #${orderNumber}: ${body.slice(0, 80)}`);
+    res.json({ ok: true });
+  } catch (err) {
+    console.error('Kitchen dashboard message failed:', err.message || err);
+    res.status(500).json({ error: 'could not send message' });
+  }
+});
 
 app.get('/kitchen', (req, res) => {
   if (!process.env.KITCHEN_PASSWORD) {
