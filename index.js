@@ -1399,8 +1399,7 @@ Need help? Type *help* anytime.`,
     savedAddressNew: 'Enter new address',
     noteSaved: "Got it — I've saved that note for next time. 📝",
     reorderUsualPrompt: 'Reorder your usual? 🔁',
-    abandonedCartRecovery: (percent) => `🎁 Still thinking it over? Your cart's still saved — come back in the next while and get *${percent}% off* this order. Just say *YES* and it's applied automatically!`,
-    discountApplied: (percent) => `🎉 ${percent}% discount applied!`,
+    abandonedCartRecovery: () => `👋 Still thinking it over? Your cart's still saved — just say *YES* whenever you're ready and we'll pick up right where you left off!`,
     ordersPausedMsg: "😔 We're not able to take new orders for the next little while — your cart's saved, just type *done* again in a bit to check out.",
     duplicateOrderWarning: (num) => `⚠️ Heads up — you just placed order #${num} a couple minutes ago. Sure you want to place *another* order? Reply *yes* again to confirm.`,
   },
@@ -1496,8 +1495,7 @@ Need help? Type *help* anytime.`,
     savedAddressNew: 'Escribir nueva dirección',
     noteSaved: 'Listo — guardé esa nota para la próxima vez. 📝',
     reorderUsualPrompt: '¿Repetir lo de siempre? 🔁',
-    abandonedCartRecovery: (percent) => `🎁 ¿Todavía lo estás pensando? Tu carrito sigue guardado — regresa pronto y obtén *${percent}% de descuento* en esta orden. ¡Solo responde *SI* y se aplica automáticamente!`,
-    discountApplied: (percent) => `🎉 ¡Descuento del ${percent}% aplicado!`,
+    abandonedCartRecovery: () => `👋 ¿Todavía lo estás pensando? Tu carrito sigue guardado — solo responde *SI* cuando quieras y seguimos justo donde lo dejaste.`,
     ordersPausedMsg: '😔 No podemos tomar pedidos nuevos por un momento — tu carrito está guardado, solo escribe *listo* otra vez en un rato para finalizar.',
     duplicateOrderWarning: (num) => `⚠️ Un momento — hiciste la orden #${num} hace un par de minutos. ¿Seguro que quieres hacer *otra* orden? Responde *si* otra vez para confirmar.`,
   },
@@ -1581,7 +1579,6 @@ const ORDER_CANCEL_WINDOW_MS = 3 * 60 * 1000; // post-confirmation edit/cancel w
 // 24-hour free-form messaging window, so no pre-approved template is
 // needed for this one (unlike a genuinely next-day recovery would require).
 const ABANDONED_CART_RECOVERY_DELAY_MS = 60 * 60 * 1000;
-const ABANDONED_CART_DISCOUNT_PERCENT = 10;
 // Duplicate-order soft warning (Phase 5): confirming again within this
 // window of a previous confirmed order asks "are you sure?" once, rather
 // than silently creating a second order — catches confused double-orders
@@ -1617,7 +1614,6 @@ function sweepIdleSessions() {
         address: session.address,
         savedAt: now,
         recoverySent: false, // see the recovery pass below
-        discountEligible: false,
       };
       funnelCounters.cartAbandoned++;
       const preservedLanguage = session.language;
@@ -1654,15 +1650,16 @@ function sweepIdleSessions() {
       continue;
     }
 
-    // Second, incentivized nudge — only once per saved cart. Only fires for
-    // a session still in the pendingResume state (i.e. they haven't already
+    // Second win-back nudge — only once per saved cart, and only for a
+    // session still in the pendingResume state (i.e. they haven't already
     // come back and either resumed or started fresh in the meantime).
+    // This used to offer a 10% discount; the discount was removed by
+    // business decision, so it's now a plain reminder.
     if (!saved.recoverySent && now - saved.savedAt >= ABANDONED_CART_RECOVERY_DELAY_MS
       && sessions[from] && sessions[from].pendingResume) {
       saved.recoverySent = true;
-      saved.discountEligible = true;
       const lang = (sessions[from] && sessions[from].language) || 'en';
-      sendWhatsAppMessage(from, TXT[lang].abandonedCartRecovery(ABANDONED_CART_DISCOUNT_PERCENT))
+      sendWhatsAppMessage(from, TXT[lang].abandonedCartRecovery())
         .catch(err => console.error(`Abandoned-cart recovery message failed for ${from}:`, err.message || err));
     }
   }
@@ -2092,23 +2089,6 @@ function idleConfirmButtonMessage(lang) {
     buttons: {
       body,
       buttons: [{ id: 'yes', title: lang === 'es' ? 'Confirmar Orden ✅' : 'Confirm Order ✅' }],
-    },
-    fallback: body,
-  };
-}
-
-// Built and tested but deliberately not wired in yet, per explicit request —
-// a one-tap "Claim Discount" button removes friction from redeeming the
-// abandoned-cart discount, which also means more customers will actually
-// claim it. Business call, not a code readiness issue. Swap the plain-text
-// TXT[lang].abandonedCartRecovery(...) call in sweepIdleSessions for
-// abandonedCartRecoveryMessage(lang, percent) to turn it on.
-function abandonedCartRecoveryMessage(lang, percent) {
-  const body = TXT[lang].abandonedCartRecovery(percent);
-  return {
-    buttons: {
-      body,
-      buttons: [{ id: 'yes', title: lang === 'es' ? 'Reclamar Descuento 🎁' : 'Claim Discount 🎁' }],
     },
     fallback: body,
   };
@@ -2798,15 +2778,10 @@ async function processWhatsAppMessage(message, res) {
             restoredCart.push(item);
           }
         });
-        // Abandoned-cart recovery discount, if this resume was triggered by
-        // that ~1hr win-back message — baked directly into each restored
-        // line's price so every downstream reader (cartTotal, Sheets log,
-        // driver notify) sees the discounted total with no other changes.
-        if (saved.discountEligible) {
-          restoredCart.forEach(item => {
-            item.price = Math.round(item.price * (1 - ABANDONED_CART_DISCOUNT_PERCENT / 100) * 100) / 100;
-          });
-        }
+        // NOTE: the abandoned-cart win-back message still goes out (~1hr
+        // after a cart is saved), but it no longer offers money off — the
+        // discount was removed by business decision. Restored lines keep
+        // their normal menu prices.
         session.cart = restoredCart;
         session.mode = saved.mode;
         session.address = saved.address;
@@ -2815,7 +2790,6 @@ async function processWhatsAppMessage(message, res) {
         delete savedCarts[from];
         const bits = [];
         if (soldOutLines.length > 0) bits.push(soldOutLines.join('\n'));
-        if (saved.discountEligible) bits.push(t.discountApplied(ABANDONED_CART_DISCOUNT_PERCENT));
         bits.push(t.resumeRestored(cartText(session.cart, lang)));
         return sendReply(res, from, [bits.join('\n\n'), ...categoryListMessages(lang)]);
       } else if (msg === 'menu' || msg === 'menú' || msg === 'no' || msg === 'cancel' || msg === 'cancelar') {
