@@ -12,20 +12,17 @@
     },
     {
       "in": "1",
-      "expectStep": "size"
-    },
-    {
-      "in": "2",
       "expectStep": "item",
       "expectCartLength": 1,
       "expectReplyContains": "Añadido"
     },
     {
       "in": "listo",
-      "expectStep": "qtybatch"
+      "expectStep": "qtyrecap"
     },
     {
-      "in": "1 sin azucar",
+      "comment": "size and quantity and a request, all in one reply",
+      "in": "1 grande papaya sin azucar",
       "expectStep": "mode",
       "expectCartTotal": 8
     },

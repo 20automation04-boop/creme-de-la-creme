@@ -16,7 +16,7 @@
     },
     {
       "in": "done",
-      "expectStep": "qtybatch"
+      "expectStep": "qtyrecap"
     },
     {
       "in": "1",

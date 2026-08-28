@@ -1,5 +1,5 @@
 {
-  "name": "back-navigation-through-size-and-item",
+  "name": "back-navigation-through-category-and-item",
   "from": "19990000004",
   "turns": [
     {
@@ -11,14 +11,6 @@
       "expectStep": "item"
     },
     {
-      "in": "1",
-      "expectStep": "size"
-    },
-    {
-      "in": "0",
-      "expectStep": "item"
-    },
-    {
       "in": "0",
       "expectStep": "menu"
     },
@@ -27,18 +19,21 @@
       "expectStep": "item"
     },
     {
+      "comment": "a sized item goes straight in at its default size, no size prompt to interrupt the next tap",
       "in": "1",
-      "expectStep": "size"
+      "expectStep": "item",
+      "expectCartLength": 1,
+      "expectReplyContains": "Regular"
     },
     {
-      "in": "0",
+      "in": "2",
       "expectStep": "item",
-      "expectCartLength": 0
+      "expectCartLength": 2
     },
     {
       "in": "0",
       "expectStep": "menu",
-      "expectCartLength": 0
+      "expectCartLength": 2
     }
   ]
 }

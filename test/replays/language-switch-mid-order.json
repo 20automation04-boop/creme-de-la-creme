@@ -28,7 +28,7 @@
     },
     {
       "in": "listo",
-      "expectStep": "qtybatch",
+      "expectStep": "qtyrecap",
       "expectCartLength": 1
     },
     {

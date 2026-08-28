@@ -23,11 +23,11 @@
     },
     {
       "in": "done",
-      "expectStep": "qtybatch"
+      "expectStep": "qtyrecap"
     },
     {
       "in": "what are the ways to pay",
-      "expectStep": "qtybatch",
+      "expectStep": "qtyrecap",
       "expectReplyContains": "cash"
     },
     {

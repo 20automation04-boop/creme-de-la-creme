@@ -47,7 +47,7 @@
     {
       "comment": "prose checkout",
       "in": "thats all",
-      "expectStep": "qtybatch"
+      "expectStep": "qtyrecap"
     },
     {
       "in": "back",

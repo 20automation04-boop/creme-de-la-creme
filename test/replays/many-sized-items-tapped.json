@@ -1,0 +1,15 @@
+{
+  "name": "five-sized-items-tapped-in-a-row-all-land-in-the-cart",
+  "from": "19990000036",
+  "turns": [
+    { "in": "1", "expectStep": "menu" },
+    { "in": "6", "expectStep": "item" },
+    { "comment": "smoothies are a SIZED category. Tapping five flavours in a row used to leave ONE item in a size nobody chose, because the size question ate the next tap.", "in": "1", "expectStep": "item", "expectCartLength": 1 },
+    { "in": "2", "expectStep": "item", "expectCartLength": 2 },
+    { "in": "3", "expectStep": "item", "expectCartLength": 3 },
+    { "in": "4", "expectStep": "item", "expectCartLength": 4 },
+    { "in": "5", "expectStep": "item", "expectCartLength": 5 },
+    { "comment": "the recap reads back all five", "in": "done", "expectStep": "qtyrecap", "expectReplyContains": "Blueberry" },
+    { "comment": "the skip button — the common case where it is one of each", "buttonId": "qty:each", "expectStep": "mode", "expectCartLength": 5, "expectCartTotal": 30 }
+  ]
+}

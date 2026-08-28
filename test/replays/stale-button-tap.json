@@ -18,14 +18,9 @@
     },
     {
       "listId": "item:6:1",
-      "expectStep": "size",
-      "expectReplyContains": "Papaya"
-    },
-    {
-      "listId": "size:6:1:2",
       "expectStep": "item",
       "expectCartLength": 2,
-      "expectReplyContains": "Large"
+      "expectReplyContains": "Papaya"
     }
   ]
 }

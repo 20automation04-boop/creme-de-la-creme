@@ -17,10 +17,10 @@
     },
     {
       "in": "done",
-      "expectStep": "qtybatch"
+      "expectStep": "qtyrecap"
     },
     {
-      "in": "2 undefined",
+      "in": "2",
       "expectStep": "mode"
     },
     {

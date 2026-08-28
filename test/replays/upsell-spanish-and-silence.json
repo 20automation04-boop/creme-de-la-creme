@@ -17,7 +17,7 @@
     },
     {
       "in": "listo",
-      "expectStep": "qtybatch"
+      "expectStep": "qtyrecap"
     },
     {
       "in": "1",
@@ -39,7 +39,7 @@
     },
     {
       "in": "listo",
-      "expectStep": "qtybatch"
+      "expectStep": "qtyrecap"
     },
     {
       "in": "1",

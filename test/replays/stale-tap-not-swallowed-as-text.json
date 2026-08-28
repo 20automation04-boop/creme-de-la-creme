@@ -17,11 +17,11 @@
     },
     {
       "in": "done",
-      "expectStep": "qtybatch"
+      "expectStep": "qtyrecap"
     },
     {
       "buttonId": "pickup",
-      "expectStep": "qtybatch"
+      "expectStep": "qtyrecap"
     },
     {
       "in": "2",

@@ -32,7 +32,7 @@ the current value in both `DRIVER_NUMBERS` and `OWNER_NUMBERS`).
 2. Copy `.env.example` to `.env` and fill in real values (transferred
    separately/securely — never via git; see "Secrets" below).
 3. `node index.js` runs it locally. `npm test` runs the replay suite
-   (`node --test test/*.test.js`) — 51 tests covering the ordering FSM,
+   (`node --test test/*.test.js`) — 52 tests covering the ordering FSM,
    button routing, owner commands, and the escalation ladder. They use
    `BOT_DRY_RUN=1` (set by the test files themselves) so no real WhatsApp
    send or Sheets write happens, even with real credentials in `.env`.
@@ -107,7 +107,7 @@ message). Summary of what it adds:
   internals a test harness needs to drive it. This was scaffolding-only at
   handoff time; **it is finished now** — `test/replay.test.js` and
   `test/menu-sheet.test.js` exist, with fixtures in `test/replays/*.json`,
-  and all 51 pass. Do not rip it out.
+  and all 52 pass. Do not rip it out.
 - `sendReply` was changed from fire-and-forget to properly `async`/awaited
   so that two rapid messages from the same sender have their actual sends
   (not just session-state mutations) stay in order under the existing
