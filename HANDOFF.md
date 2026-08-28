@@ -32,7 +32,7 @@ the current value in both `DRIVER_NUMBERS` and `OWNER_NUMBERS`).
 2. Copy `.env.example` to `.env` and fill in real values (transferred
    separately/securely — never via git; see "Secrets" below).
 3. `node index.js` runs it locally. `npm test` runs the replay suite
-   (`node --test test/*.test.js`) — 48 tests covering the ordering FSM,
+   (`node --test test/*.test.js`) — 49 tests covering the ordering FSM,
    button routing, owner commands, and the escalation ladder. They use
    `BOT_DRY_RUN=1` (set by the test files themselves) so no real WhatsApp
    send or Sheets write happens, even with real credentials in `.env`.
@@ -100,7 +100,7 @@ message). Summary of what it adds:
   internals a test harness needs to drive it. This was scaffolding-only at
   handoff time; **it is finished now** — `test/replay.test.js` and
   `test/menu-sheet.test.js` exist, with fixtures in `test/replays/*.json`,
-  and all 48 pass. Do not rip it out.
+  and all 49 pass. Do not rip it out.
 - `sendReply` was changed from fire-and-forget to properly `async`/awaited
   so that two rapid messages from the same sender have their actual sends
   (not just session-state mutations) stay in order under the existing
@@ -144,6 +144,12 @@ one. Keying sold-out state by position used to produce both failure modes at
 once — the item that was really sold out kept selling, and its in-stock
 neighbour was refused. `itemAt(categoryId, itemIndex)` is the one sanctioned
 place to turn a position (what the customer typed or tapped) into an item.
+
+That applies to stored cart lines too. `savedCarts` and `lastOrders` outlive
+menu edits, so each line carries `sheetId` and is resolved back to a live item
+with `resolveCartLine()` before its sold-out status is re-checked — the *repeat*
+command and the abandoned-cart resume both do this. Checking the stored position
+instead read whatever item had since slid into that slot.
 
 New code that records anything per-item should key off `item.sheetId`, never
 off the item's index. `test/menu-sheet.test.js` pins this.

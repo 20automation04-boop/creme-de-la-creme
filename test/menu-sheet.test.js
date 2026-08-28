@@ -225,3 +225,46 @@ test('an item created after a discontinue does not reuse a surviving item id', (
   const ids = cat.items.map(i => i.sheetId);
   assert.equal(new Set(ids).size, ids.length, `sheetIds must be unique within a category, got: ${ids.join(', ')}`);
 });
+
+// A stored cart line (lastOrders, savedCarts) records the item's position at
+// the moment it was added. Both the *repeat* command and the abandoned-cart
+// resume re-check sold-out status later — by which point a discontinue may
+// have slid a different item into that slot. Both now resolve through
+// resolveCartLine(), so this covers the shared helper.
+test('a repeat order re-checks the item it ordered, not whatever now sits in that slot', async () => {
+  bot.resetMenuSheetTrackingForTests();
+  const cat = bot.MENU.find(c => c.items.length >= 4);
+  const original = cat.items.slice();
+  bot.applyMenuSheetRows(rowsForItems(cat, original));
+
+  const from = '19990000951';
+  delete bot.sessions[from];
+  delete bot.lastOrders[from];
+  const res = () => ({ headersSent: false, sendStatus() { this.headersSent = true; } });
+  let n = 0;
+  const send = (body) => bot.processWhatsAppMessage(
+    { from, id: `repeat-stale-${++n}`, type: 'text', text: { body } }, res());
+
+  // Order the item at display position 3 and confirm it.
+  for (const turn of ['1', cat.id, '3', '1', '0', 'done', 'pickup', 'yes']) await send(turn);
+  const ordered = original[2];
+  assert.equal(bot.lastOrders[from].cart[0].name, ordered.name);
+  assert.equal(bot.lastOrders[from].cart[0].sheetId, ordered.sheetId,
+    'the cart line must record the stable id, not just the position');
+
+  // Discontinue the item ABOVE it (everything below shifts up one) and mark
+  // the ordered item sold out.
+  const survivors = original.filter(it => it !== original[1]);
+  const r = bot.applyMenuSheetRows(rowsForItems(cat, survivors, ordered.name));
+  bot.soldOutIds.clear();
+  r.soldOut.forEach(id => bot.soldOutIds.add(id));
+  assert.notEqual(cat.items.indexOf(ordered) + 1, 3,
+    'this test is only meaningful if the ordered item actually shifted position');
+
+  bot.dryRunSent.length = 0;
+  await send('repeat');
+
+  const cartNames = bot.sessions[from].cart.map(c => c.name);
+  assert.ok(!cartNames.includes(ordered.name),
+    `${ordered.name} is sold out and must not be re-added by repeat, got cart: ${cartNames.join(', ')}`);
+});

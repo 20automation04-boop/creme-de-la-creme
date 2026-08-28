@@ -1875,8 +1875,32 @@ function addToCart(cart, name, price, qty, note = '', categoryId = null, itemInd
     return true;
   }
   if (cart.length >= MAX_CART_LINES) return false;
-  cart.push({ name, price, qty, note, categoryId, itemIndex });
+  // sheetId alongside the position: the position is only true at this
+  // instant, and a cart line outlives menu edits — savedCarts and
+  // lastOrders are both replayed later, after a refresh may have shifted
+  // everything below a discontinued item.
+  const source = (categoryId != null && itemIndex != null) ? itemAt(categoryId, itemIndex) : null;
+  cart.push({ name, price, qty, note, categoryId, itemIndex, sheetId: source ? source.sheetId : null });
   return true;
+}
+
+// A stored cart line (savedCarts, lastOrders) carries the position the item
+// had when it was added. Re-checking sold-out status against that position
+// later reads whatever item has since slid into the slot — so resolve by the
+// stable id and report the item's CURRENT position instead. Returns null if
+// the item has been discontinued outright.
+function resolveCartLine(line) {
+  if (line.sheetId) {
+    const item = menuItemById.get(line.sheetId);
+    if (!item) return null;
+    const cat = MENU.find(c => c.id === line.sheetId.split('.')[0]);
+    const idx = cat ? cat.items.indexOf(item) : -1;
+    return idx >= 0 ? { item, categoryId: cat.id, itemIndex: idx + 1 } : null;
+  }
+  // Line predates sheetId (added earlier in this process) — best effort.
+  if (line.categoryId == null || line.itemIndex == null) return null;
+  const item = itemAt(line.categoryId, line.itemIndex);
+  return item ? { item, categoryId: line.categoryId, itemIndex: line.itemIndex } : null;
 }
 
 function cartTotal(cart) {
@@ -2777,6 +2801,11 @@ async function transcribeVoiceNote(mediaId, mimeType) {
   return (result.text || '').trim();
 }
 
+// The AI answer is spoken to the customer as the shop. Real answers are a
+// sentence or two; anything longer is the model having been talked into
+// something.
+const AI_ANSWER_MAX_CHARS = 500;
+
 async function interpretMessage(rawMsg) {
   const menuListing = buildMenuListingForAI();
   const shopFacts = `Hours: ${SHOP_INFO.hoursEn}
@@ -2821,7 +2850,11 @@ Respond with ONLY raw JSON, no markdown, no explanation, in this exact shape:
     const parsed = JSON.parse(text);
     return {
       matches: Array.isArray(parsed.matches) ? parsed.matches : [],
-      answer: typeof parsed.answer === 'string' ? parsed.answer : null,
+      // Bounded. This string is sent to the customer verbatim, as the shop,
+      // and the model that produced it was handed the customer's own message
+      // as part of its prompt — so treat it as untrusted length at minimum.
+      // A genuine FAQ answer here is one or two sentences.
+      answer: typeof parsed.answer === 'string' ? parsed.answer.slice(0, AI_ANSWER_MAX_CHARS) : null,
     };
   } catch (err) {
     console.error('AI parse error:', err);
@@ -2953,11 +2986,19 @@ function buildRepeatReply(from, session, lang) {
   let repeatCapped = false;
   last.cart.forEach(item => {
     if (repeatCapped) return;
-    if (item.categoryId != null && item.itemIndex != null && isItemSoldOut(item.categoryId, item.itemIndex)) {
-      soldOutLines.push(t.soldOutItem(item.name, suggestSubstitute(item.categoryId, item.itemIndex)));
+    const live = resolveCartLine(item);
+    if (item.sheetId && !live) {
+      // Discontinued since the order was placed — same apology as sold out,
+      // but there is no position left to suggest a substitute from.
+      soldOutLines.push(t.soldOutItem(item.name, null));
       return;
     }
-    if (!addToCart(session.cart, item.name, item.price, item.qty, item.note, item.categoryId, item.itemIndex)) {
+    if (live && isItemSoldOut(live.categoryId, live.itemIndex)) {
+      soldOutLines.push(t.soldOutItem(item.name, suggestSubstitute(live.categoryId, live.itemIndex)));
+      return;
+    }
+    if (!addToCart(session.cart, item.name, item.price, item.qty, item.note,
+        live ? live.categoryId : item.categoryId, live ? live.itemIndex : item.itemIndex)) {
       repeatCapped = true;
       return;
     }
@@ -3271,10 +3312,16 @@ async function processWhatsAppMessage(message, res) {
         const soldOutLines = [];
         const restoredCart = [];
         saved.cart.forEach(item => {
-          if (item.categoryId != null && item.itemIndex != null && isItemSoldOut(item.categoryId, item.itemIndex)) {
-            soldOutLines.push(t.soldOutItem(item.name, suggestSubstitute(item.categoryId, item.itemIndex)));
+          // Same stale-position hazard as the repeat path: this cart was
+          // saved before an idle expiry, and a menu refresh since then may
+          // have shifted every position below a discontinued item.
+          const live = resolveCartLine(item);
+          if (item.sheetId && !live) {
+            soldOutLines.push(t.soldOutItem(item.name, null));
+          } else if (live && isItemSoldOut(live.categoryId, live.itemIndex)) {
+            soldOutLines.push(t.soldOutItem(item.name, suggestSubstitute(live.categoryId, live.itemIndex)));
           } else {
-            restoredCart.push(item);
+            restoredCart.push(live ? { ...item, categoryId: live.categoryId, itemIndex: live.itemIndex } : item);
           }
         });
         // NOTE: the abandoned-cart win-back message still goes out (~1hr
