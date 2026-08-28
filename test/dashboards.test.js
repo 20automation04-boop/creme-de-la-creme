@@ -257,6 +257,36 @@ test('manager item edits reject bad prices and unknown items', async () => {
   }
 });
 
+test('manager upsell pin validates, round-trips, and is reflected in the menu', async () => {
+  seed();
+  const cookie = await loginAs('manager', 'manager-test-pw');
+
+  const badCases = [
+    [{ categoryId: '99', itemIndex: 1 }, 'an unknown category'],
+    [{ categoryId: '1', itemIndex: 999 }, 'an unknown item index'],
+  ];
+  for (const [body, label] of badCases) {
+    const res = await req('POST', '/manager/upsell', { cookie, body });
+    assert.equal(res.status, 400, `${label} must be rejected`);
+  }
+
+  const pin = await req('POST', '/manager/upsell', { cookie, body: { categoryId: '2', itemIndex: 1 } });
+  assert.equal(pin.status, 200);
+  assert.deepEqual(pin.json.pinnedUpsell, { categoryId: '2', itemIndex: 1, name: 'Salt Caramel Coffee' });
+
+  const menu = await req('GET', '/manager/menu', { cookie });
+  const pinnedItems = menu.json.categories.flatMap(c => c.items.filter(it => it.pinned));
+  assert.equal(pinnedItems.length, 1, 'exactly one item must be flagged pinned');
+  assert.equal(pinnedItems[0].name, 'Salt Caramel Coffee');
+
+  const clear = await req('POST', '/manager/upsell', { cookie, body: { categoryId: null } });
+  assert.equal(clear.status, 200);
+  assert.equal(clear.json.pinnedUpsell, null, 'clearing must be reversible');
+
+  const menuAfter = await req('GET', '/manager/menu', { cookie });
+  assert.equal(menuAfter.json.categories.flatMap(c => c.items.filter(it => it.pinned)).length, 0);
+});
+
 test('manager pause toggle round-trips', async () => {
   seed();
   const cookie = await loginAs('manager', 'manager-test-pw');

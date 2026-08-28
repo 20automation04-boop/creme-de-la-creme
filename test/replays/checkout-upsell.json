@@ -24,8 +24,8 @@
       "buttonId": "qty:each",
       "expectStep": "mode",
       "expectCartLength": 1,
-      "expectReplyContains": "Add *",
-      "comment": "the offer must actually APPEAR here — asserting only that add1:/no_thanks work would pass even if it were never shown"
+      "expectReplyContains": "goes great with your *",
+      "comment": "the offer must actually APPEAR here (asserting only that add1:/no_thanks work would pass even if it were never shown) and, since the cart is drinks-only, must be a food pairing (category 8), never another drink"
     },
     {
       "comment": "declining leaves the cart alone and keeps them at mode",
@@ -35,7 +35,7 @@
     },
     {
       "comment": "accepting adds exactly one and stays at mode",
-      "buttonId": "add1:2:1",
+      "buttonId": "add1:8:1",
       "expectStep": "mode",
       "expectCartLength": 2
     },

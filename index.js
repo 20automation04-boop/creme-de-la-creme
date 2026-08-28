@@ -478,6 +478,17 @@ function isOwner(from) {
 // state after a deploy rather than have a pause silently persist forever.
 let ordersPaused = false;
 
+// In-memory only, same rationale as ordersPaused above — resets on
+// restart/redeploy. { categoryId, itemIndex } or null. Set from the Manager
+// dashboard's Menu tab to force the checkout upsell to always suggest one
+// specific item (e.g. pushing a seasonal item) instead of the automatic
+// food/drink pairing — see pickUpsell().
+let pinnedUpsell = null;
+// Test-only: lets replay fixtures set the pin directly (same idea as
+// resetMenuSheetTrackingForTests) instead of going through the HTTP
+// endpoint. No production caller ever calls this.
+function setPinnedUpsellForTests(v) { pinnedUpsell = v; }
+
 // ---- FUNNEL COUNTERS (lightweight, in-memory, since server start) ----
 // Deliberately NOT Sheets-backed — logging every step transition to a
 // Sheet would mean a write (or more) per customer message, which risks
@@ -3568,16 +3579,43 @@ function applyQtyRecapReply(rawMsg, session, lang) {
 // ---- CHECKOUT UPSELL ----
 // One suggestion, once per session, at the moment they say "done". Picks a
 // genuine best-seller (from real order history) that is NOT already in the
-// cart and comes from a DIFFERENT category — suggesting a second coffee to
-// someone buying coffee is noise; suggesting a hot dog to someone buying
-// three drinks is a real add-on.
+// cart and NEVER from a category already in the cart — a second coffee to
+// someone buying coffee is noise, not a pairing, so there's no fallback to
+// "same category" if nothing else qualifies; no suggestion beats a bad one.
+//
+// Categories 1-7 are drinks, 8-11 are food (see menu-data.js) — an all-food
+// order gets a drink suggested and vice versa, so the pitch is a real pairing
+// ("goes great with your X") instead of just some other random item.
 //
 // Deliberately restrained: one item, one tap to decline, and never shown
 // twice in a session. An upsell that nags costs more in abandoned carts than
 // it earns.
+//
+// A manager can pin one specific item from the dashboard's Menu tab
+// (pinnedUpsell), e.g. to push a seasonal special. That's a deliberate
+// business call, so it overrides the automatic pairing entirely — including
+// the same-category rule above — but still won't suggest an item that's
+// already in the cart or sold out; those two checks are never worth
+// bypassing.
+const DRINK_CATEGORY_IDS = new Set(['1', '2', '3', '4', '5', '6', '7']);
+const isDrinkCategory = (catId) => DRINK_CATEGORY_IDS.has(String(catId));
+
 async function pickUpsell(session) {
   const inCart = new Set(session.cart.map(i => `${i.categoryId}.${i.itemIndex}`));
   const cartCategories = new Set(session.cart.map(i => String(i.categoryId)));
+
+  if (pinnedUpsell) {
+    const pinCat = MENU.find(c => c.id === pinnedUpsell.categoryId);
+    const pinItem = pinCat && pinCat.items[pinnedUpsell.itemIndex - 1];
+    if (pinItem &&
+        !inCart.has(`${pinnedUpsell.categoryId}.${pinnedUpsell.itemIndex}`) &&
+        !isItemSoldOut(pinnedUpsell.categoryId, pinnedUpsell.itemIndex)) {
+      return { cat: pinCat, item: pinItem, itemIndex: pinnedUpsell.itemIndex, anchorName: session.cart[0].name };
+    }
+  }
+
+  const hasDrink = session.cart.some(i => isDrinkCategory(i.categoryId));
+  const hasFood = session.cart.some(i => !isDrinkCategory(i.categoryId));
 
   let ranked = [];
   try {
@@ -3591,17 +3629,29 @@ async function pickUpsell(session) {
 
   const candidates = ranked.filter(h =>
     !inCart.has(`${h.cat.id}.${h.itemIndex}`) &&
+    !cartCategories.has(String(h.cat.id)) &&
     !isItemSoldOut(h.cat.id, h.itemIndex));
 
-  // Prefer a different category; fall back to any unrelated item.
-  return candidates.find(h => !cartCategories.has(String(h.cat.id))) || candidates[0] || null;
+  // Prefer the complementary side (food<->drink) so the suggestion reads as
+  // an actual pairing. A cart with both already has no obvious gap, so any
+  // untouched category is fair game there.
+  let pool = candidates;
+  if (hasFood && !hasDrink) pool = candidates.filter(h => isDrinkCategory(h.cat.id));
+  else if (hasDrink && !hasFood) pool = candidates.filter(h => !isDrinkCategory(h.cat.id));
+
+  const hit = pool[0] || candidates[0];
+  if (!hit) return null;
+  // What the suggestion is pitched as pairing with — the first thing they
+  // added, since that's what was actually on their mind.
+  return { ...hit, anchorName: session.cart[0].name };
 }
 
 function upsellMessage(hit, lang) {
   const price = hit.item.sizes ? hit.item.sizes[0].price : hit.item.price;
+  const emoji = isDrinkCategory(hit.cat.id) ? '🥤' : '🌮';
   const body = lang === 'es'
-    ? `🤔 ¿Le añadimos *${hit.item.name}* por $${price.toFixed(2)}?`
-    : `🤔 Add *${hit.item.name}* for $${price.toFixed(2)}?`;
+    ? `${emoji} *${hit.item.name}* combina genial con tu *${hit.anchorName}* — ¿lo añadimos por $${price.toFixed(2)}?`
+    : `${emoji} *${hit.item.name}* goes great with your *${hit.anchorName}* — want to add it for $${price.toFixed(2)}?`;
   return {
     buttons: {
       body,
@@ -5947,6 +5997,9 @@ const MANAGER_HTML = `<!doctype html>
                 border:1px solid var(--line); background:var(--surface2); color:var(--text); cursor:pointer; }
   .row button.save { background:var(--good); color:var(--onAccent); border-color:transparent; }
   .row button.out { background:var(--pillOff); color:#ffc9c9; border-color:#5a2b2b; }
+  .row button.pin { background:var(--accent); color:var(--onAccent); border-color:transparent; }
+  #upsellStatus { font-size:13px; color:var(--dim); margin-bottom:12px; }
+  #upsellStatus strong { color:var(--text); }
   #login { max-width:340px; margin:16vh auto; padding:26px; background:var(--card);
            border:1px solid var(--line); border-radius:12px; }
   #login input { width:100%; font:inherit; padding:12px; margin:12px 0; border-radius:8px;
@@ -6012,7 +6065,8 @@ const MANAGER_HTML = `<!doctype html>
     </section>
 
     <section id="tab-menu" hidden>
-      <h2>Menu — tap to edit price or mark sold out</h2>
+      <h2>Menu — tap to edit price, mark sold out, or pin the checkout upsell</h2>
+      <div id="upsellStatus"></div>
       <div id="menu"></div>
     </section>
 
@@ -6167,6 +6221,12 @@ function saveItem(catId, idx, body, btn, label){
 
 function loadMenu(){
   fetch('/manager/menu').then(function(r){return r.json();}).then(function(d){
+    var pinned = null;
+    (d.categories||[]).forEach(function(c){ c.items.forEach(function(it){ if(it.pinned) pinned=it.name; }); });
+    document.getElementById('upsellStatus').innerHTML = pinned
+      ? 'Upsell pinned to <strong>'+esc(pinned)+'</strong> — offered to every customer at checkout. '+
+        '<button class="ghost" onclick="clearUpsell()">Use automatic pairing instead</button>'
+      : 'Upsell is automatic — a food/drink pairing based on what\\'s in the cart. Tap ☆ on an item to always suggest it instead.';
     document.getElementById('menu').innerHTML = (d.categories||[]).map(function(c){
       return '<div class="cat"><h3>'+esc(c.category)+'</h3>'+c.items.map(function(it){
         var id='f_'+c.id+'_'+it.itemIndex;
@@ -6178,6 +6238,8 @@ function loadMenu(){
           '<button class="save" onclick="savePrice(\\''+c.id+'\\','+it.itemIndex+',\\''+id+'\\','+it.sized+',this)">Save</button>'+
           '<button class="'+(it.soldOut?'':'out')+'" onclick="saveItem(\\''+c.id+'\\','+it.itemIndex+',{available:'+(it.soldOut?'true':'false')+'},this)">'+
             (it.soldOut?'Back in stock':'Sold out')+'</button>'+
+          '<button class="'+(it.pinned?'pin':'')+'" onclick="setUpsell(\\''+c.id+'\\','+it.itemIndex+',this)">'+
+            (it.pinned?'★ Upsell pick':'☆ Set as upsell')+'</button>'+
         '</div>';
       }).join('')+'</div>';
     }).join('') || '<div class="empty">No menu loaded.</div>';
@@ -6188,6 +6250,23 @@ function savePrice(catId, idx, fieldId, sized, btn){
   var body={ price: document.getElementById(fieldId+'_p').value };
   if(sized){ var l=document.getElementById(fieldId+'_l'); if(l && l.value) body.largePrice=l.value; }
   saveItem(catId, idx, body, btn);
+}
+
+function setUpsell(catId, idx, btn){
+  btn.disabled=true;
+  fetch('/manager/upsell',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({categoryId:catId,itemIndex:idx})})
+   .then(function(r){ return r.json().then(function(j){ if(!r.ok) throw new Error(j.error||'failed'); }); })
+   .then(function(){ loadMenu(); })
+   .catch(function(e){ alert(e.message); btn.disabled=false; });
+}
+
+function clearUpsell(){
+  fetch('/manager/upsell',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({categoryId:null})})
+   .then(function(r){return r.json();})
+   .then(function(){ loadMenu(); })
+   .catch(function(e){ alert(e.message); });
 }
 
 function loadCustomers(){
@@ -6222,9 +6301,30 @@ app.get('/manager/menu', (req, res) => {
       largePrice: item.sizes && item.sizes[1] ? item.sizes[1].price : null,
       sized: Boolean(item.sizes),
       soldOut: isItemSoldOut(cat.id, i + 1),
+      pinned: Boolean(pinnedUpsell && pinnedUpsell.categoryId === cat.id && pinnedUpsell.itemIndex === i + 1),
     })),
   }));
   res.json({ categories });
+});
+
+// Pin (or clear) which item the checkout upsell suggests, overriding the
+// automatic food/drink pairing in pickUpsell() — see the comment there for
+// why the pin still respects "in cart" / "sold out" but nothing else.
+// Omit categoryId (or send it empty) to go back to automatic.
+app.post('/manager/upsell', (req, res) => {
+  if (!requireManagerAuth(req, res)) return;
+  const { categoryId, itemIndex } = req.body || {};
+  if (categoryId === null || categoryId === undefined || categoryId === '') {
+    pinnedUpsell = null;
+    console.log('Manager dashboard: upsell suggestion reset to automatic');
+    return res.json({ ok: true, pinnedUpsell: null });
+  }
+  const cat = MENU.find(c => c.id === String(categoryId));
+  const item = cat && cat.items[Number(itemIndex) - 1];
+  if (!item) return res.status(400).json({ error: 'unknown item' });
+  pinnedUpsell = { categoryId: String(categoryId), itemIndex: Number(itemIndex) };
+  console.log(`Manager dashboard: upsell pinned to ${categoryId}.${itemIndex} (${item.name})`);
+  res.json({ ok: true, pinnedUpsell: { categoryId: pinnedUpsell.categoryId, itemIndex: pinnedUpsell.itemIndex, name: item.name } });
 });
 
 // Who is talking to the bot RIGHT NOW. This data lives only in memory —
@@ -6349,4 +6449,4 @@ if (require.main === module) {
 
 // For the replay-test harness (test/replay.test.js) only — production never
 // requires this file as a module, so these exports are inert otherwise.
-module.exports = { app, processWhatsAppMessage, isItemSoldOut, itemAt, interpretMessage, dryRunSent, sessions, lastOrders, savedCarts, cartTotal, OWNER_NUMBERS, DRIVER_NUMBERS, soldOutIds, sweepIdleSessions, replySummaryText, MENU, applyMenuSheetRows, resetMenuSheetTrackingForTests, notifyStatusChange, dryRunSheetRows, dryRunSheetWrites };
+module.exports = { app, processWhatsAppMessage, isItemSoldOut, itemAt, interpretMessage, dryRunSent, sessions, lastOrders, savedCarts, cartTotal, OWNER_NUMBERS, DRIVER_NUMBERS, soldOutIds, sweepIdleSessions, replySummaryText, MENU, applyMenuSheetRows, resetMenuSheetTrackingForTests, notifyStatusChange, dryRunSheetRows, dryRunSheetWrites, setPinnedUpsellForTests };

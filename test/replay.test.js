@@ -78,6 +78,7 @@ for (const file of fixtureFiles) {
     delete bot.lastOrders[from];
     delete bot.savedCarts[from];
     bot.soldOutIds.clear();
+    bot.setPinnedUpsellForTests(null);
 
     for (let i = 0; i < fixture.turns.length; i++) {
       const turn = fixture.turns[i];
@@ -88,6 +89,7 @@ for (const file of fixtureFiles) {
       // session's idle clock to exercise sweepIdleSessions().
       if (turn.markSoldOut) turn.markSoldOut.forEach(id => bot.soldOutIds.add(id));
       if (turn.clearSoldOut) bot.soldOutIds.clear();
+      if (turn.setPinnedUpsell !== undefined) bot.setPinnedUpsellForTests(turn.setPinnedUpsell);
       if (turn.setLastMessageAtMsAgo !== undefined) {
         const s = bot.sessions[from];
         assert.ok(s, `${label}: setLastMessageAtMsAgo needs an existing session`);

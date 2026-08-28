@@ -1,0 +1,39 @@
+{
+  "name": "checkout-upsell-suggests-a-drink-for-a-food-only-cart",
+  "from": "19990000032",
+  "turns": [
+    { "in": "1", "expectStep": "menu" },
+    {
+      "comment": "category 8 is Subs & Sandwiches — food, not a drink",
+      "in": "8",
+      "expectStep": "item"
+    },
+    {
+      "in": "1",
+      "expectStep": "item",
+      "expectCartLength": 1
+    },
+    {
+      "in": "done",
+      "expectStep": "qtyrecap"
+    },
+    {
+      "buttonId": "qty:each",
+      "expectStep": "mode",
+      "expectCartLength": 1,
+      "expectReplyContains": "goes great with your *Grilled Cheese*",
+      "comment": "cart is food-only, so the pairing must be a drink (category 1), the mirror image of checkout-upsell.json"
+    },
+    {
+      "comment": "accepting adds exactly one drink and stays at mode",
+      "buttonId": "add1:1:1",
+      "expectStep": "mode",
+      "expectCartLength": 2
+    },
+    {
+      "comment": "checkout still completes normally",
+      "buttonId": "pickup",
+      "expectStep": "confirm"
+    }
+  ]
+}

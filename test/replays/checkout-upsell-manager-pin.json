@@ -1,0 +1,43 @@
+{
+  "name": "manager-pinned-upsell-overrides-automatic-pairing",
+  "from": "19990000033",
+  "turns": [
+    {
+      "comment": "manager pins category 2 item 1 (Salt Caramel Coffee — a DRINK, same side as the cart) from the dashboard's Menu tab",
+      "setPinnedUpsell": { "categoryId": "2", "itemIndex": 1 }
+    },
+    { "in": "1", "expectStep": "menu" },
+    {
+      "comment": "category 1 is also a drink category — the pin must still win over the food/drink pairing logic",
+      "in": "1",
+      "expectStep": "item"
+    },
+    {
+      "in": "1",
+      "expectStep": "item",
+      "expectCartLength": 1
+    },
+    {
+      "in": "done",
+      "expectStep": "qtyrecap"
+    },
+    {
+      "buttonId": "qty:each",
+      "expectStep": "mode",
+      "expectCartLength": 1,
+      "expectReplyContains": "Salt Caramel Coffee* goes great with your *Vanilla Bean*",
+      "comment": "the manager's pin is shown even though it's the same (drink) side as the cart, which the automatic logic would never offer"
+    },
+    {
+      "comment": "accepting adds exactly the pinned item",
+      "buttonId": "add1:2:1",
+      "expectStep": "mode",
+      "expectCartLength": 2
+    },
+    {
+      "comment": "checkout still completes normally",
+      "buttonId": "pickup",
+      "expectStep": "confirm"
+    }
+  ]
+}
