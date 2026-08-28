@@ -729,8 +729,39 @@ function isValidSenderId(from) {
 // runaway cost (it's a fixed-window counter, so a sender can burst up to
 // ~2x max right at a window boundary — acceptable for a cost ceiling, not
 // a precise guarantee). Bump these if this shop ever gets genuinely busy.
-const RATE_LIMIT_PER_SENDER = { max: 20, windowMs: 60 * 1000 };
-const RATE_LIMIT_GLOBAL = { max: 120, windowMs: 60 * 1000 };
+// Raised from 20/min after a real customer was silently cut off mid-order.
+// Ordering ONE item is already ~10 messages (language, menu, category, item,
+// quantity, notes, done, mode, address, confirm) — someone tapping quickly
+// through a three-item order blew past 20 in well under a minute, and every
+// message past that was dropped with no reply at all. The limit exists to
+// cap abuse and AI spend, not to police normal ordering speed.
+const RATE_LIMIT_PER_SENDER = { max: 60, windowMs: 60 * 1000 };
+const RATE_LIMIT_GLOBAL = { max: 300, windowMs: 60 * 1000 };
+
+// Muscle-memory double-taps: the same button pressed twice in quick
+// succession arrives as two DIFFERENT message ids, so id-based dedup can't
+// see it. Processing both is at best a duplicated prompt and at worst a
+// duplicated action, so an identical payload from the same sender inside
+// this window is ignored.
+// At most one "slow down" notice per sender per minute, so the notice can't
+// itself become the flood.
+const RATE_LIMIT_NOTICE = { max: 1, windowMs: 60 * 1000 };
+
+const TAP_DEBOUNCE_MS = 1200;
+const lastTapBydSender = new Map();
+
+function isRepeatTap(from, payload) {
+  if (!payload) return false;
+  const now = Date.now();
+  const prev = lastTapBydSender.get(from);
+  lastTapBydSender.set(from, { payload, at: now });
+  if (lastTapBydSender.size > 2000) {
+    for (const [k, v] of lastTapBydSender) {
+      if (now - v.at > 60 * 1000) lastTapBydSender.delete(k);
+    }
+  }
+  return Boolean(prev && prev.payload === payload && now - prev.at < TAP_DEBOUNCE_MS);
+}
 const rateBuckets = new Map(); // key -> { count, windowStart }
 
 function isRateLimited(key, { max, windowMs }) {
@@ -994,6 +1025,15 @@ function applyMenuSheetRows(rows) {
 function findMenuItemByName(query) {
   const q = query.trim().toLowerCase();
   if (!q) return null;
+  // Exact name wins over substring. Without this pass, "Mango" resolves to
+  // "Mango/Pine" — whichever happens to sit earlier in the category — so
+  // asking for one item silently gets you a different one. Substring
+  // matching is still the fallback, since owner commands like
+  // `soldout vanilla` rely on partial names.
+  for (const cat of MENU) {
+    const idx = cat.items.findIndex(item => item.name.toLowerCase() === q);
+    if (idx >= 0) return { categoryId: cat.id, itemIndex: idx + 1, item: cat.items[idx] };
+  }
   for (const cat of MENU) {
     const idx = cat.items.findIndex(item => item.name.toLowerCase().includes(q));
     if (idx >= 0) return { categoryId: cat.id, itemIndex: idx + 1, item: cat.items[idx] };
@@ -2741,13 +2781,22 @@ Rules:
 
 // ---- PHOTO RECOGNITION ----
 // A customer photographs a drink/dish (a friend's order, a printed menu, a
-// social post) and asks "this one". Gemini is shown the photo alongside the
-// real menu and asked to name the closest item — strictly, so a photo of
-// something we don't sell comes back as no match instead of a confident
-// wrong guess that lands the wrong food in a real order.
+// social post) and asks "this one".
 //
-// Returns { itemName, confident, description } — itemName is always a name
-// copied from OUR menu, never invented.
+// Three outcomes, not two. Only a clear, unambiguous match adds an item
+// straight to the cart — putting the wrong food in a real order is the one
+// genuinely costly mistake here. But refusing to help whenever certainty is
+// short of total is its own failure: if the photo is plainly a frozen mango
+// drink and we sell three, the useful move is to ASK which, not to dump the
+// whole menu and make the customer start over.
+//
+//   high   + exactly one candidate -> order it
+//   medium (or several candidates) -> show those candidates to tap
+//   low    / nothing recognisable  -> say what we see, show the menu
+//
+// Names are always verified against the real menu, so a hallucinated item
+// can never reach the order path regardless of how confident the model claims
+// to be.
 async function identifyItemFromPhoto(mediaId, mimeType, caption) {
   const { data, mimeType: clean } = await downloadWhatsAppMedia(mediaId, mimeType, 'photo');
   const menuListing = buildMenuListingForAI();
@@ -2757,16 +2806,19 @@ async function identifyItemFromPhoto(mediaId, mimeType, caption) {
 Our exact menu (categoryId.itemIndex | category | name | price):
 ${menuListing}
 
-Decide which SINGLE menu item the photo most likely shows.
+Identify which menu item(s) the photo could be.
 
 Rules:
-- "name" MUST be copied character-for-character from the menu above. Never invent an item.
-- Set "confident" true ONLY if the photo clearly shows that item or something unmistakably equivalent.
-- If the photo is unclear, shows food we don't sell, or is not food at all, set "name" to null and "confident" to false.
-- "description" is a SHORT neutral description of what you actually see (max 12 words), used to talk back to the customer.
+- Every name in "candidates" MUST be copied character-for-character from the menu above. Never invent an item.
+- "confidence": "high" only when the photo unmistakably shows ONE specific item.
+  "medium" when you can narrow it to a few plausible items (e.g. it's clearly a
+  frozen strawberry drink but we sell several). "low" when you really can't tell.
+- List up to 3 candidates, best first. Use an empty list only if nothing on our
+  menu plausibly matches, or the photo isn't food at all.
+- "description": SHORT neutral description of what you actually see (max 12 words).
 
 Respond with ONLY raw JSON, no markdown:
-{"name": "Mango", "confident": true, "description": "a bright orange frozen mango drink"}`;
+{"candidates": ["Mango", "Mango/Pine"], "confidence": "medium", "description": "a bright orange frozen drink"}`;
 
   const result = await withTimeout(genAI.models.generateContent({
     model: 'gemini-3.1-flash-lite',
@@ -2780,16 +2832,30 @@ Respond with ONLY raw JSON, no markdown:
     parsed = JSON.parse(raw);
   } catch (err) {
     console.warn('Photo recognition returned unparseable JSON:', raw.slice(0, 200));
-    return { itemName: null, confident: false, description: '' };
+    return { confidence: 'low', hits: [], description: '' };
   }
 
-  // Trust the model's LABEL but verify it against the real menu — a
+  // Trust the model's LABELS but resolve each against the real menu — a
   // hallucinated name would otherwise flow into the order path as if real.
-  const claimed = String(parsed.name || '').trim();
-  const found = claimed ? findMenuItemByName(claimed) : null;
+  // Sold-out items are dropped here too, so we never offer something we
+  // can't actually make.
+  const hits = [];
+  for (const name of (Array.isArray(parsed.candidates) ? parsed.candidates : []).slice(0, 3)) {
+    const found = findMenuItemByName(String(name || '').trim());
+    if (!found) continue;
+    if (isItemSoldOut(found.categoryId, found.itemIndex)) continue;
+    if (hits.some(h => h.item === found.item)) continue;
+    hits.push({ cat: MENU.find(c => c.id === found.categoryId), item: found.item, itemIndex: found.itemIndex });
+  }
+
+  const claimed = String(parsed.confidence || '').toLowerCase();
+  const confidence = ['high', 'medium', 'low'].includes(claimed) ? claimed : 'low';
   return {
-    itemName: found ? found.item.name : null,
-    confident: Boolean(parsed.confident) && Boolean(found),
+    // "high" only survives if exactly one real, in-stock item backs it —
+    // several candidates means it isn't actually unambiguous, whatever the
+    // model said.
+    confidence: confidence === 'high' && hits.length !== 1 ? 'medium' : confidence,
+    hits,
     description: String(parsed.description || '').slice(0, 120),
   };
 }
@@ -3047,12 +3113,37 @@ app.post('/whatsapp', async (req, res) => {
     return res.sendStatus(200);
   }
 
+  // Muscle-memory double-tap on the SAME button — two message ids, identical
+  // payload, milliseconds apart. Dropped before the rate limiter so a
+  // fast tapper doesn't burn their own budget on taps we're discarding
+  // anyway. Interactive ids only: repeating typed text is legitimate
+  // ("yes" twice is a real answer to the duplicate-order warning).
+  if (message.type === 'interactive') {
+    const inter = message.interactive || {};
+    const tapId = (inter.button_reply && inter.button_reply.id) || (inter.list_reply && inter.list_reply.id) || '';
+    if (isRepeatTap(from, tapId)) {
+      console.warn(`Repeat tap "${tapId}" from ${from} within ${TAP_DEBOUNCE_MS}ms — ignoring.`);
+      return res.sendStatus(200);
+    }
+  }
+
   if (isRateLimited('__global__', RATE_LIMIT_GLOBAL)) {
     console.warn('Global rate limit hit — dropping request.');
     return res.sendStatus(200);
   }
   if (isRateLimited(from, RATE_LIMIT_PER_SENDER)) {
+    // Previously a silent drop, which is how a real customer got cut off
+    // mid-order with no idea why — they just saw the bot stop responding.
+    // Tell them once per window instead; the cooldown keeps the notice
+    // itself from becoming the spam.
     console.warn(`Rate limit hit for ${from} — dropping request.`);
+    if (!isRateLimited(`__notice__${from}`, RATE_LIMIT_NOTICE)) {
+      const lang = (sessions[from] && sessions[from].language) || null;
+      const en = "Whoa, that was quick! 😅 Give me a couple of seconds to catch up — your order is safe.";
+      const es = '¡Uy, qué rápido! 😅 Dame unos segundos para ponerme al día — tu orden está a salvo.';
+      sendWhatsAppMessage(from, lang === 'es' ? es : lang === 'en' ? en : `${en}\n\n${es}`)
+        .catch(e => console.error('Rate-limit notice failed:', e.message || e));
+    }
     return res.sendStatus(200);
   }
 
@@ -3264,15 +3355,30 @@ async function processWhatsAppMessage(message, res) {
         }
 
         const guess = await identifyItemFromPhoto(mediaId, mimeType, caption);
-        if (guess.confident && guess.itemName) {
-          // Feed the recognised NAME through the normal text pipeline, so
-          // photo ordering reuses all the existing matching, sold-out and
-          // cart logic instead of a parallel path.
-          rawMsg = caption ? `${guess.itemName} ${caption}` : guess.itemName;
-          console.log(`Photo from ${from} recognised as "${guess.itemName}"`);
+        const lang0 = session.language || 'en';
+        const seen = guess.description
+          ? (lang0 === 'es' ? `Veo ${guess.description}. ` : `I can see ${guess.description}. `)
+          : '';
+
+        if (guess.confidence === 'high' && guess.hits.length === 1) {
+          // Unambiguous: feed the recognised NAME through the normal text
+          // pipeline, so photo ordering reuses all the existing matching,
+          // sold-out and cart logic instead of a parallel path.
+          const name = guess.hits[0].item.name;
+          rawMsg = caption ? `${name} ${caption}` : name;
+          console.log(`Photo from ${from} recognised as "${name}" (high)`);
+        } else if (guess.hits.length > 0) {
+          // Narrowed but not certain — offer the candidates instead of
+          // giving up. Rows reuse the self-describing item:<cat>:<idx> ids,
+          // so tapping one routes exactly like picking it from a category.
+          console.log(`Photo from ${from}: ${guess.hits.length} candidate(s), confidence ${guess.confidence}`);
+          return sendReply(res, from, [
+            lang0 === 'es'
+              ? `📷 ${seen}¿Es alguno de estos?`
+              : `📷 ${seen}Is it one of these?`,
+            recommendationMessage(guess.hits, lang0),
+          ]);
         } else {
-          const lang0 = session.language || 'en';
-          const seen = guess.description ? (lang0 === 'es' ? `Veo ${guess.description}. ` : `I can see ${guess.description}. `) : '';
           return sendReply(res, from, [
             lang0 === 'es'
               ? `📷 ${seen}Pero no estoy seguro de cuál artículo del menú es. ¿Me dices el nombre o eliges del menú?`
