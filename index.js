@@ -4611,16 +4611,30 @@ const KITCHEN_HTML = `<!doctype html>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Kitchen — Créme De La Créme</title>
 <style>
-  :root { --bg:#12141a; --card:#1c1f28; --line:#2c3140; --text:#f2f4f8; --dim:#98a0b3;
-          --new:#ffb020; --prep:#3b82f6; --ready:#22c55e; --deliver:#a855f7; }
+  /* Day default, matching the driver board; Night is one tap away and
+     remembered per device. Kitchens vary wildly in lighting, so the choice
+     belongs to whoever is standing in front of the tablet. */
+  :root { --bg:#f6f7f9; --card:#ffffff; --line:#dde1e8; --text:#11141a; --dim:#5b6373;
+          --new:#c2740a; --prep:#1d4ed8; --ready:#15803d; --deliver:#7c3aed;
+          --brand:#b4304f; --shadow:0 1px 3px rgba(16,20,30,.10); --flash:#ffeec2;
+          --surface2:#eef0f4; --surface3:#e3e6ec; --onAccent:#ffffff; --bad:#dc2626; }
+  :root[data-theme="night"] { --bg:#12141a; --card:#1c1f28; --line:#2c3140; --text:#f2f4f8;
+          --dim:#98a0b3; --new:#ffb020; --prep:#3b82f6; --ready:#22c55e; --deliver:#a855f7;
+          --brand:#ff8fa8; --shadow:none; --flash:#3a2f12;
+          --surface2:#252a36; --surface3:#2f3543; --onAccent:#04210f; --bad:#ef4444; }
   * { box-sizing:border-box; }
   body { margin:0; background:var(--bg); color:var(--text);
-         font:16px/1.5 system-ui,-apple-system,Segoe UI,Roboto,sans-serif; }
+         font:16px/1.5 system-ui,-apple-system,Segoe UI,Roboto,sans-serif;
+         -webkit-text-size-adjust:100%; }
   header { position:sticky; top:0; background:var(--bg); border-bottom:1px solid var(--line);
            padding:14px 18px; display:flex; align-items:center; gap:14px; z-index:5; }
-  h1 { font-size:19px; margin:0; font-weight:650; }
-  .count { background:var(--new); color:#000; font-weight:700; border-radius:999px;
+  h1 { font-size:19px; margin:0; font-weight:700; letter-spacing:-.01em; }
+  h1 .brand { color:var(--brand); }
+  .count { background:var(--new); color:#fff; font-weight:700; border-radius:999px;
            padding:2px 11px; font-size:15px; }
+  #theme { background:var(--card); color:var(--text); border:1px solid var(--line);
+           border-radius:8px; padding:7px 11px; font:inherit; font-size:14px;
+           font-weight:600; cursor:pointer; min-height:0; }
   .muted { color:var(--dim); font-size:13px; margin-left:auto; }
   .legend { display:flex; gap:12px; flex-wrap:wrap; font-size:12px; color:var(--dim); }
   .legend span { display:flex; align-items:center; gap:5px; }
@@ -4629,48 +4643,48 @@ const KITCHEN_HTML = `<!doctype html>
      wider than the screen forcing a horizontal scroll. */
   main { padding:16px; display:grid; gap:14px;
          grid-template-columns:repeat(auto-fill,minmax(min(330px,100%),1fr)); }
-  .card { background:var(--card); border:1px solid var(--line); border-left:5px solid var(--new);
-          border-radius:12px; padding:15px; }
+  .card { background:var(--card); border:1px solid var(--line); border-left:6px solid var(--new);
+          border-radius:12px; padding:15px; box-shadow:var(--shadow); }
   .card.s-Preparing { border-left-color:var(--prep); }
   .card.s-Ready { border-left-color:var(--ready); }
   .card.s-Out { border-left-color:var(--deliver); }
   .card.flash { animation:flash 1s ease-in-out 3; }
-  @keyframes flash { 0%,100%{background:var(--card);} 50%{background:#3a2f12;} }
+  @keyframes flash { 0%,100%{background:var(--card);} 50%{background:var(--flash);} }
   .top { display:flex; align-items:baseline; gap:10px; margin-bottom:8px; }
   .num { font-size:23px; font-weight:700; }
   .time { color:var(--dim); font-size:13px; margin-left:auto; }
   .mode { font-size:14px; font-weight:600; margin-bottom:8px; }
-  .items { white-space:pre-line; margin:10px 0; padding:10px; background:#161923;
-           border-radius:8px; font-size:15px; }
+  .items { white-space:pre-line; margin:10px 0; padding:10px; background:var(--bg);
+           border:1px solid var(--line); border-radius:8px; font-size:15px; }
   .meta { color:var(--dim); font-size:13px; margin:3px 0; word-break:break-word; }
   .status { display:inline-block; font-size:12px; font-weight:700; text-transform:uppercase;
             letter-spacing:.04em; color:var(--dim); margin-bottom:9px; }
   .btns { display:flex; flex-wrap:wrap; gap:7px; margin-top:11px; }
   button { font:inherit; font-size:14px; font-weight:600; border:1px solid var(--line);
-           background:#252a36; color:var(--text); border-radius:8px; padding:9px 13px;
+           background:var(--surface2); color:var(--text); border-radius:8px; padding:9px 13px;
            cursor:pointer; min-height:42px; }
-  button:hover { background:#2f3543; }
+  button:hover { background:var(--surface3); }
   button:disabled { opacity:.45; cursor:default; }
-  button.go { background:var(--ready); color:#04210f; border-color:transparent; }
-  button.warn { background:#3a2020; color:#ffc9c9; border-color:#5a2b2b; }
-  button.msg { background:#1e2f3f; color:#bfe0ff; border-color:#2b4a63; }
+  button.go { background:var(--ready); color:var(--onAccent); border-color:transparent; }
+  button.warn { background:var(--bad); color:#fff; border-color:transparent; }
+  button.msg { background:var(--prep); color:#fff; border-color:transparent; }
   .notebox { margin-top:11px; border-top:1px solid var(--line); padding-top:11px; }
   .notebox textarea { width:100%; font:inherit; font-size:15px; padding:10px; border-radius:8px;
-    border:1px solid var(--line); background:#161923; color:var(--text); resize:vertical; }
+    border:1px solid var(--line); background:var(--bg); color:var(--text); resize:vertical; }
   .noterow { display:flex; gap:8px; align-items:flex-start; margin-top:8px; flex-wrap:wrap; }
   .quick { display:flex; gap:6px; flex-wrap:wrap; flex:1; }
   button.chip { font-size:12px; font-weight:500; padding:6px 10px; min-height:0;
-    background:#222733; color:var(--dim); border:1px solid var(--line); border-radius:999px; }
+    background:var(--surface2); color:var(--dim); border:1px solid var(--line); border-radius:999px; }
   button.chip:hover { color:var(--text); }
-  button.send { background:#1e2f3f; color:#bfe0ff; border-color:#2b4a63; }
+  button.send { background:var(--prep); color:#fff; border-color:transparent; }
   .lbl { font-size:12px; color:var(--dim); }
   .sent:not(:empty) { margin-top:7px; color:var(--ready); }
   .empty { color:var(--dim); text-align:center; padding:70px 20px; grid-column:1/-1; }
   #login { max-width:340px; margin:16vh auto; padding:26px; background:var(--card);
            border:1px solid var(--line); border-radius:12px; }
   #login input { width:100%; font:inherit; padding:12px; margin:12px 0; border-radius:8px;
-                 border:1px solid var(--line); background:#161923; color:var(--text); }
-  #login button { width:100%; background:var(--ready); color:#04210f; border-color:transparent; }
+                 border:1px solid var(--line); background:var(--bg); color:var(--text); }
+  #login button { width:100%; background:var(--ready); color:var(--onAccent); border-color:transparent; }
   .err { color:#ff9b9b; font-size:14px; min-height:20px; }
 
   /* Phones. The header carries a title, count, 4-item legend and a
@@ -4700,7 +4714,8 @@ const KITCHEN_HTML = `<!doctype html>
 
 <div id="app" hidden>
   <header>
-    <h1>Orders</h1><span class="count" id="count">0</span>
+    <h1><span class="brand">🍧 Créme</span> · Kitchen</h1><span class="count" id="count">0</span>
+    <button id="theme" onclick="toggleTheme()">🌙 Night</button>
     <span class="legend">
       <span><i style="background:var(--new)"></i>New</span>
       <span><i style="background:var(--prep)"></i>Preparing</span>
@@ -4715,6 +4730,21 @@ const KITCHEN_HTML = `<!doctype html>
 <script>
 var seen = JSON.parse(sessionStorage.getItem('seenOrders') || '[]');
 var first = true;
+
+// Day default; the choice sticks per device. Kitchens vary wildly in
+// lighting, so this belongs to whoever is standing at the tablet.
+function applyTheme(t){
+  if(t==='night') document.documentElement.setAttribute('data-theme','night');
+  else document.documentElement.removeAttribute('data-theme');
+  var b=document.getElementById('theme');
+  if(b) b.textContent = t==='night' ? '☀️ Day' : '🌙 Night';
+}
+function toggleTheme(){
+  var next = document.documentElement.getAttribute('data-theme')==='night' ? 'day' : 'night';
+  try { localStorage.setItem('kitchenTheme', next); } catch(e){}
+  applyTheme(next);
+}
+try { applyTheme(localStorage.getItem('kitchenTheme') || 'day'); } catch(e){ applyTheme('day'); }
 
 function esc(s){ return String(s == null ? '' : s).replace(/[&<>"']/g, function(c){
   return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]; }); }
@@ -5072,10 +5102,12 @@ const DRIVER_HTML = `<!doctype html>
      NIGHT is one tap away for evening runs and is remembered per device. */
   :root { --bg:#ffffff; --card:#ffffff; --line:#c7ccd6; --text:#0b0d12; --dim:#4a5160;
           --go:#15803d; --out:#7c3aed; --call:#1d4ed8; --land-bg:#fff8e1;
-          --land-line:#d9a400; --land-text:#4a3600; --shadow:0 1px 3px rgba(0,0,0,.14); }
+          --land-line:#d9a400; --land-text:#4a3600; --shadow:0 1px 3px rgba(0,0,0,.14);
+          --brand:#b4304f; }
   :root[data-theme="night"] { --bg:#12141a; --card:#1c1f28; --line:#2c3140; --text:#f2f4f8;
           --dim:#98a0b3; --go:#22c55e; --out:#a855f7; --call:#3b82f6; --land-bg:#2a2416;
-          --land-line:#4a3f1f; --land-text:#ffe2a8; --shadow:none; }
+          --land-line:#4a3f1f; --land-text:#ffe2a8; --shadow:none; --brand:#ff8fa8; }
+  h1 .brand { color:var(--brand); }
   * { box-sizing:border-box; }
   body { margin:0; background:var(--bg); color:var(--text);
          font:16px/1.5 system-ui,-apple-system,Segoe UI,Roboto,sans-serif;
@@ -5120,7 +5152,7 @@ const DRIVER_HTML = `<!doctype html>
   #login { max-width:340px; margin:16vh auto; padding:26px; background:var(--card);
            border:1px solid var(--line); border-radius:12px; }
   #login input { width:100%; font:inherit; padding:12px; margin:12px 0; border-radius:8px;
-                 border:1px solid var(--line); background:#161923; color:var(--text); }
+                 border:1px solid var(--line); background:var(--bg); color:var(--text); }
   #login button { width:100%; background:var(--go); color:#04210f; border-color:transparent; }
   .err { color:#ff9b9b; font-size:14px; min-height:20px; }
 
@@ -5147,7 +5179,7 @@ const DRIVER_HTML = `<!doctype html>
 </div>
 <div id="app" hidden>
   <header>
-    <h1>Deliveries</h1><span class="count" id="count">0</span>
+    <h1><span class="brand">🍧 Créme</span> · Deliveries</h1><span class="count" id="count">0</span>
     <button id="theme" onclick="toggleTheme()">🌙 Night</button>
     <span class="muted" id="updated">—</span>
   </header>
@@ -5392,11 +5424,22 @@ const MANAGER_HTML = `<!doctype html>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Manager — Créme De La Créme</title>
 <style>
-  :root { --bg:#12141a; --card:#1c1f28; --line:#2c3140; --text:#f2f4f8; --dim:#98a0b3;
-          --good:#22c55e; --warn:#ffb020; --bad:#ef4444; --accent:#3b82f6; }
+  :root { --bg:#f6f7f9; --card:#ffffff; --line:#dde1e8; --text:#11141a; --dim:#5b6373;
+          --good:#15803d; --warn:#c2740a; --bad:#dc2626; --accent:#1d4ed8;
+          --brand:#b4304f; --surface2:#eef0f4; --onAccent:#ffffff;
+          --shadow:0 1px 3px rgba(16,20,30,.10); --pillOn:#e7f6ec; --pillOff:#fdeaea; }
+  :root[data-theme="night"] { --bg:#12141a; --card:#1c1f28; --line:#2c3140; --text:#f2f4f8;
+          --dim:#98a0b3; --good:#22c55e; --warn:#ffb020; --bad:#ef4444; --accent:#3b82f6;
+          --brand:#ff8fa8; --surface2:#252a36; --onAccent:#04210f;
+          --shadow:none; --pillOn:#12301c; --pillOff:#3a2020; }
   * { box-sizing:border-box; }
   body { margin:0; background:var(--bg); color:var(--text);
-         font:16px/1.5 system-ui,-apple-system,Segoe UI,Roboto,sans-serif; }
+         font:16px/1.5 system-ui,-apple-system,Segoe UI,Roboto,sans-serif;
+         -webkit-text-size-adjust:100%; }
+  h1 .brand { color:var(--brand); }
+  #theme { background:var(--card); color:var(--text); border:1px solid var(--line);
+           border-radius:8px; padding:7px 11px; font:inherit; font-size:14px;
+           font-weight:600; cursor:pointer; }
   header { position:sticky; top:0; background:var(--bg); border-bottom:1px solid var(--line);
            padding:14px 18px; display:flex; align-items:center; gap:12px; z-index:5; flex-wrap:wrap; }
   h1 { font-size:19px; margin:0; font-weight:650; }
@@ -5409,15 +5452,15 @@ const MANAGER_HTML = `<!doctype html>
   .tile .v { font-size:26px; font-weight:700; margin-top:4px; }
   .tile .v.money::before { content:'$'; font-size:17px; opacity:.65; margin-right:1px; }
   .pill { display:inline-block; font-size:12px; font-weight:700; padding:3px 9px; border-radius:999px; }
-  .pill.on { background:#12301c; color:var(--good); }
-  .pill.off { background:#3a2020; color:#ffc9c9; }
+  .pill.on { background:var(--pillOn); color:var(--good); }
+  .pill.off { background:var(--pillOff); color:#ffc9c9; }
   table { width:100%; border-collapse:collapse; font-size:14px; }
   .scroll { overflow-x:auto; border:1px solid var(--line); border-radius:12px; background:var(--card); }
   th,td { text-align:left; padding:9px 12px; border-bottom:1px solid var(--line); white-space:nowrap; }
   th { color:var(--dim); font-size:12px; text-transform:uppercase; letter-spacing:.05em; }
   tr:last-child td { border-bottom:none; }
   td.items { white-space:normal; min-width:230px; color:var(--dim); }
-  .st { font-size:12px; font-weight:700; padding:2px 8px; border-radius:999px; background:#252a36; }
+  .st { font-size:12px; font-weight:700; padding:2px 8px; border-radius:999px; background:var(--surface2); }
   .st.Confirmed { color:var(--warn); } .st.Preparing { color:var(--accent); }
   .st[class*='Ready'], .st[class*='Out'] { color:var(--good); }
   .st.Completed { color:var(--dim); } .st.Cancelled { color:var(--bad); }
@@ -5427,10 +5470,10 @@ const MANAGER_HTML = `<!doctype html>
   .empty { color:var(--dim); font-size:14px; }
   .tabs { display:flex; gap:6px; }
   .tab { font:inherit; font-size:14px; font-weight:600; padding:7px 13px; border-radius:8px;
-         border:1px solid var(--line); background:#222735; color:var(--dim); cursor:pointer; }
+         border:1px solid var(--line); background:var(--surface2); color:var(--dim); cursor:pointer; }
   .tab.on { background:var(--accent); border-color:transparent; color:#fff; }
   .ghost { font:inherit; font-size:13px; font-weight:600; padding:6px 12px; border-radius:8px;
-           border:1px solid var(--line); background:#222735; color:var(--text); cursor:pointer; }
+           border:1px solid var(--line); background:var(--surface2); color:var(--text); cursor:pointer; }
   .cat { margin-bottom:18px; }
   .cat h3 { font-size:15px; margin:0 0 8px; }
   .row { display:flex; align-items:center; gap:10px; background:var(--card); border:1px solid var(--line);
@@ -5438,18 +5481,18 @@ const MANAGER_HTML = `<!doctype html>
   .row.out { opacity:.55; }
   .row .nm { flex:1; min-width:130px; font-size:14px; }
   .row input { width:74px; font:inherit; font-size:14px; padding:6px 8px; border-radius:7px;
-               border:1px solid var(--line); background:#161923; color:var(--text); }
+               border:1px solid var(--line); background:var(--bg); color:var(--text); }
   .row .lbl { font-size:11px; color:var(--dim); }
   .row button { font:inherit; font-size:13px; font-weight:600; padding:7px 11px; border-radius:7px;
-                border:1px solid var(--line); background:#252a36; color:var(--text); cursor:pointer; }
-  .row button.save { background:var(--good); color:#04210f; border-color:transparent; }
-  .row button.out { background:#3a2020; color:#ffc9c9; border-color:#5a2b2b; }
+                border:1px solid var(--line); background:var(--surface2); color:var(--text); cursor:pointer; }
+  .row button.save { background:var(--good); color:var(--onAccent); border-color:transparent; }
+  .row button.out { background:var(--pillOff); color:#ffc9c9; border-color:#5a2b2b; }
   #login { max-width:340px; margin:16vh auto; padding:26px; background:var(--card);
            border:1px solid var(--line); border-radius:12px; }
   #login input { width:100%; font:inherit; padding:12px; margin:12px 0; border-radius:8px;
-                 border:1px solid var(--line); background:#161923; color:var(--text); }
+                 border:1px solid var(--line); background:var(--bg); color:var(--text); }
   #login button { width:100%; font:inherit; font-weight:600; padding:11px; border:none;
-                  border-radius:8px; background:var(--good); color:#04210f; cursor:pointer; }
+                  border-radius:8px; background:var(--good); color:var(--onAccent); cursor:pointer; }
   .err { color:#ff9b9b; font-size:14px; min-height:20px; }
 
   /* Tablet and phone. The header holds a title, a status pill, a
@@ -5486,9 +5529,10 @@ const MANAGER_HTML = `<!doctype html>
 
 <div id="app" hidden>
   <header>
-    <h1>Manager</h1>
+    <h1><span class="brand">🍧 Créme</span> · Manager</h1>
     <span id="paused"></span>
     <button class="ghost" id="pauseBtn" onclick="togglePause()">—</button>
+    <button id="theme" onclick="toggleTheme()">🌙 Night</button>
     <span class="tabs">
       <button class="tab on" data-tab="overview" onclick="showTab('overview')">Overview</button>
       <button class="tab" data-tab="menu" onclick="showTab('menu')">Menu</button>
@@ -5581,6 +5625,19 @@ function load(){
 }
 
 var currentTab='overview', paused=false;
+
+function applyTheme(t){
+  if(t==='night') document.documentElement.setAttribute('data-theme','night');
+  else document.documentElement.removeAttribute('data-theme');
+  var b=document.getElementById('theme');
+  if(b) b.textContent = t==='night' ? '☀️ Day' : '🌙 Night';
+}
+function toggleTheme(){
+  var next = document.documentElement.getAttribute('data-theme')==='night' ? 'day' : 'night';
+  try { localStorage.setItem('managerTheme', next); } catch(e){}
+  applyTheme(next);
+}
+try { applyTheme(localStorage.getItem('managerTheme') || 'day'); } catch(e){ applyTheme('day'); }
 
 function showTab(t){
   currentTab=t;
