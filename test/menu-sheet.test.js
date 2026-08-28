@@ -155,3 +155,73 @@ test('a mass disappearance (>30%) is treated as a bad read, not a bulk discontin
   // Restore the real baseline.
   bot.applyMenuSheetRows(allRows);
 });
+
+// ---- STABLE ITEM IDENTITY ----
+// Deleting a row splices the category array, so every later item shifts down
+// one display position. Sold-out state is keyed by the item's stable sheetId
+// precisely so it does NOT shift with it — this used to compare a new position
+// against a flag recorded under the old one, which sold an out-of-stock item
+// and refused its in-stock neighbour at the same time.
+
+// Rows for exactly these items, addressed by their STABLE ids (not by their
+// current position, which is the thing under test).
+function rowsForItems(cat, items, soldOutName) {
+  return items.map(it => [
+    it.sheetId,
+    cat.category,
+    it.name,
+    it.name === soldOutName ? 'FALSE' : 'TRUE',
+    String(it.sizes ? it.sizes[0].price : it.price),
+    '',
+  ]);
+}
+
+test('sold-out state follows the item when an earlier row is discontinued', () => {
+  bot.resetMenuSheetTrackingForTests();
+  const cat = bot.MENU.find(c => c.items.length >= 4);
+  const original = cat.items.slice();
+  bot.applyMenuSheetRows(rowsForItems(cat, original));
+
+  const discontinued = original[1];
+  const soldOut = original[2];
+  const survivors = original.filter(it => it !== discontinued);
+
+  const res = bot.applyMenuSheetRows(rowsForItems(cat, survivors, soldOut.name));
+  bot.soldOutIds.clear();
+  res.soldOut.forEach(id => bot.soldOutIds.add(id));
+
+  assert.ok(!cat.items.includes(discontinued), 'the discontinued item should be gone from the category');
+  assert.ok(cat.items.indexOf(soldOut) !== original.indexOf(soldOut),
+    'this test is only meaningful if the sold-out item actually shifted position');
+
+  const pos = cat.items.indexOf(soldOut) + 1;
+  assert.equal(bot.isItemSoldOut(cat.id, pos), true,
+    `${soldOut.name} is sold out in the sheet and must still read as sold out at its new position ${pos}`);
+
+  cat.items.forEach((item, i) => {
+    if (item === soldOut) return;
+    assert.equal(bot.isItemSoldOut(cat.id, i + 1), false,
+      `${item.name} is in stock and must not inherit a shifted flag`);
+  });
+});
+
+test('an item created after a discontinue does not reuse a surviving item id', () => {
+  bot.resetMenuSheetTrackingForTests();
+  const cat = bot.MENU.find(c => c.items.length >= 4);
+  const original = cat.items.slice();
+  bot.applyMenuSheetRows(rowsForItems(cat, original));
+
+  const survivors = original.filter(it => it !== original[1]);
+  // Discontinue one row and add a brand-new item (bare category id) in the
+  // same refresh: the category is now shorter than its highest issued id, so a
+  // naive `items.length + 1` would collide with a surviving item.
+  bot.applyMenuSheetRows([
+    ...rowsForItems(cat, survivors),
+    [cat.id, cat.category, 'Test Brand New Item', 'TRUE', '3', ''],
+  ]);
+
+  const created = cat.items.find(i => i.name === 'Test Brand New Item');
+  assert.ok(created, 'the new item should have been created');
+  const ids = cat.items.map(i => i.sheetId);
+  assert.equal(new Set(ids).size, ids.length, `sheetIds must be unique within a category, got: ${ids.join(', ')}`);
+});

@@ -841,8 +841,23 @@ function itemKey(categoryId, itemIndex) {
   return `${categoryId}.${itemIndex}`;
 }
 
+// A display position (what the customer typed or tapped) -> the item sitting
+// there right now. Positions shift when an earlier item is discontinued, so
+// this is the ONLY place allowed to turn one into an item.
+function itemAt(categoryId, itemIndex) {
+  const cat = MENU.find(c => c.id === categoryId);
+  return (cat && cat.items[itemIndex - 1]) || null;
+}
+
+// Keyed by the item's STABLE sheet id, not its current position. Deleting a
+// row from the Availability tab splices the category, so every later item
+// shifts down one — and this used to compare the new position against flags
+// recorded under the old one. The result was both failure modes at once: the
+// item that really was sold out kept selling, and its in-stock neighbour was
+// refused.
 function isItemSoldOut(categoryId, itemIndex) {
-  return soldOutIds.has(itemKey(categoryId, itemIndex));
+  const item = itemAt(categoryId, itemIndex);
+  return item ? soldOutIds.has(item.sheetId) : false;
 }
 
 // Best-effort substitute for a sold-out item — the first OTHER non-sold-out
@@ -861,7 +876,12 @@ function suggestSubstitute(categoryId, itemIndex) {
 // way — adding brand-new items isn't sheet-driven (see refreshMenuFromSheet).
 const menuItemById = new Map();
 MENU.forEach(cat => {
-  cat.items.forEach((item, idx) => menuItemById.set(itemKey(cat.id, idx + 1), item));
+  cat.items.forEach((item, idx) => {
+    // Fixed once, here. Everything that talks to the Availability sheet keys
+    // off item.sheetId from now on — never off the current position.
+    item.sheetId = itemKey(cat.id, idx + 1);
+    menuItemById.set(item.sheetId, item);
+  });
 });
 
 // Ids this process has confirmed present in the Availability sheet as of
@@ -945,7 +965,14 @@ function applyMenuSheetRows(rows) {
         ? { name, sizes: [{ key: '1', label: 'Regular', price: regular }, { key: '2', label: 'Large', price: large }] }
         : { name, price: regular };
       cat.items.push(item);
-      key = itemKey(cat.id, cat.items.length);
+      // Not just `cat.items.length`: once any row in this category has been
+      // discontinued the array is shorter than the highest id ever issued, so
+      // that would hand the new item an id a surviving item already owns.
+      // Take the first genuinely free one instead.
+      let nextIndex = cat.items.length;
+      while (menuItemById.has(itemKey(cat.id, nextIndex))) nextIndex++;
+      key = itemKey(cat.id, nextIndex);
+      item.sheetId = key;
       menuItemById.set(key, item);
       corrections.push({ rowIndex, id: key });
       console.log(`Availability sheet: created new item "${name}" as ${key}.`);
@@ -1027,7 +1054,12 @@ function findMenuItemByName(query) {
 // same "never let Sheets flakiness break the live path" principle as
 // everywhere else in this file.
 async function setItemAvailability(categoryId, itemIndex, available) {
-  const key = itemKey(categoryId, itemIndex);
+  const item = itemAt(categoryId, itemIndex);
+  if (!item) return;
+  // item.sheetId rather than the display position: after a discontinue the
+  // two differ, and the position matched a DIFFERENT item's row in the
+  // Availability sheet — so `soldout <name>` silently marked the wrong item.
+  const key = item.sheetId;
   if (available) soldOutIds.delete(key); else soldOutIds.add(key);
 
   if (!process.env.GOOGLE_SHEETS_ID) return;
@@ -1065,7 +1097,11 @@ async function refreshMenuFromSheet() {
     // never reach here, so both sold-out state AND prices fail open
     // (keep whatever was already in memory) rather than resetting to blank.
     const { soldOut, corrections } = applyMenuSheetRows(res.data.values || []);
-    soldOutIds = soldOut;
+    // In place, not a rebind: module.exports captured this Set object, so
+    // reassigning the binding would leave every external holder — the test
+    // harness included — reading a Set the bot no longer consults.
+    soldOutIds.clear();
+    for (const id of soldOut) soldOutIds.add(id);
     jobSucceeded('refreshMenuFromSheet');
 
     // Write back the real "categoryId.itemIndex" id for any row that was
@@ -4475,4 +4511,4 @@ if (require.main === module) {
 
 // For the replay-test harness (test/replay.test.js) only — production never
 // requires this file as a module, so these exports are inert otherwise.
-module.exports = { app, processWhatsAppMessage, dryRunSent, sessions, lastOrders, savedCarts, cartTotal, OWNER_NUMBERS, DRIVER_NUMBERS, soldOutIds, sweepIdleSessions, replySummaryText, MENU, applyMenuSheetRows, resetMenuSheetTrackingForTests, notifyStatusChange };
+module.exports = { app, processWhatsAppMessage, isItemSoldOut, itemAt, dryRunSent, sessions, lastOrders, savedCarts, cartTotal, OWNER_NUMBERS, DRIVER_NUMBERS, soldOutIds, sweepIdleSessions, replySummaryText, MENU, applyMenuSheetRows, resetMenuSheetTrackingForTests, notifyStatusChange };
