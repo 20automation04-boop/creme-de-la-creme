@@ -4570,8 +4570,10 @@ const KITCHEN_HTML = `<!doctype html>
   .legend { display:flex; gap:12px; flex-wrap:wrap; font-size:12px; color:var(--dim); }
   .legend span { display:flex; align-items:center; gap:5px; }
   .legend i { width:11px; height:11px; border-radius:3px; display:inline-block; }
+  /* min() so a 320px phone gets one full-width column instead of a card
+     wider than the screen forcing a horizontal scroll. */
   main { padding:16px; display:grid; gap:14px;
-         grid-template-columns:repeat(auto-fill,minmax(330px,1fr)); }
+         grid-template-columns:repeat(auto-fill,minmax(min(330px,100%),1fr)); }
   .card { background:var(--card); border:1px solid var(--line); border-left:5px solid var(--new);
           border-radius:12px; padding:15px; }
   .card.s-Preparing { border-left-color:var(--prep); }
@@ -4597,6 +4599,17 @@ const KITCHEN_HTML = `<!doctype html>
   button.go { background:var(--ready); color:#04210f; border-color:transparent; }
   button.warn { background:#3a2020; color:#ffc9c9; border-color:#5a2b2b; }
   button.msg { background:#1e2f3f; color:#bfe0ff; border-color:#2b4a63; }
+  .notebox { margin-top:11px; border-top:1px solid var(--line); padding-top:11px; }
+  .notebox textarea { width:100%; font:inherit; font-size:15px; padding:10px; border-radius:8px;
+    border:1px solid var(--line); background:#161923; color:var(--text); resize:vertical; }
+  .noterow { display:flex; gap:8px; align-items:flex-start; margin-top:8px; flex-wrap:wrap; }
+  .quick { display:flex; gap:6px; flex-wrap:wrap; flex:1; }
+  button.chip { font-size:12px; font-weight:500; padding:6px 10px; min-height:0;
+    background:#222733; color:var(--dim); border:1px solid var(--line); border-radius:999px; }
+  button.chip:hover { color:var(--text); }
+  button.send { background:#1e2f3f; color:#bfe0ff; border-color:#2b4a63; }
+  .lbl { font-size:12px; color:var(--dim); }
+  .sent:not(:empty) { margin-top:7px; color:var(--ready); }
   .empty { color:var(--dim); text-align:center; padding:70px 20px; grid-column:1/-1; }
   #login { max-width:340px; margin:16vh auto; padding:26px; background:var(--card);
            border:1px solid var(--line); border-radius:12px; }
@@ -4604,6 +4617,22 @@ const KITCHEN_HTML = `<!doctype html>
                  border:1px solid var(--line); background:#161923; color:var(--text); }
   #login button { width:100%; background:var(--ready); color:#04210f; border-color:transparent; }
   .err { color:#ff9b9b; font-size:14px; min-height:20px; }
+
+  /* Phones. The header carries a title, count, 4-item legend and a
+     timestamp — it has to be allowed to wrap or it pushes the page wide. */
+  @media (max-width:640px){
+    header { flex-wrap:wrap; gap:8px; padding:11px 13px; }
+    h1 { font-size:17px; }
+    .muted { margin-left:0; width:100%; }
+    .legend { gap:9px; font-size:11px; }
+    main { padding:11px; gap:11px; }
+    .card { padding:13px; }
+    .num { font-size:21px; }
+    /* Full-width taps: easier to hit accurately with one hand. */
+    .btns button { flex:1 1 46%; }
+    .notebox textarea { font-size:16px; } /* 16px stops iOS zooming on focus */
+  }
+  @media (max-width:380px){ .btns button { flex:1 1 100%; } }
 </style>
 </head>
 <body>
@@ -4669,17 +4698,55 @@ function setStatus(rowNum, orderNumber, status, btn){
     .catch(function(e){ alert(e.message); btn.disabled = false; });
 }
 
-function messageCustomer(rowNum, orderNumber, btn){
-  var text = prompt('Message to the customer for order #' + orderNumber + ':\\n\\n(e.g. "the one marked [P] has pepper")');
-  if (text === null) return;
-  text = text.trim();
-  if (!text) return;
-  btn.disabled = true;
+// Inline compose box rather than a prompt() popup — kiosk and locked-down
+// tablet browsers block prompt(), and typing into a modal one-handed beside
+// a hot line is miserable. The box also survives the 10s auto-refresh: see
+// the openNotes guard in load().
+// { orderNumber: draftText } for boxes the user has open. Drafts are
+// snapshotted before every re-render and restored after, because the list
+// refreshes every 10s and would otherwise delete whatever staff were
+// halfway through typing.
+var openNotes = {};
+
+function snapshotNotes(){
+  Object.keys(openNotes).forEach(function(n){
+    var box = document.getElementById('note_' + n);
+    var ta = box && box.querySelector('textarea');
+    if (ta) openNotes[n] = ta.value;
+  });
+}
+
+function toggleNote(orderNumber){
+  var box = document.getElementById('note_' + orderNumber);
+  if (!box) return;
+  if (box.hasAttribute('hidden')) {
+    box.removeAttribute('hidden');
+    openNotes[orderNumber] = openNotes[orderNumber] || '';
+    var ta = box.querySelector('textarea'); if (ta) ta.focus();
+  } else {
+    box.setAttribute('hidden','');
+    delete openNotes[orderNumber];
+  }
+}
+
+function sendNote(rowNum, orderNumber, btn){
+  var box = document.getElementById('note_' + orderNumber);
+  var ta = box.querySelector('textarea');
+  var text = (ta.value || '').trim();
+  if (!text) { ta.focus(); return; }
+  btn.disabled = true; var old = btn.textContent; btn.textContent = 'Sending…';
   fetch('/kitchen/message', { method:'POST', headers:{'Content-Type':'application/json'},
                               body: JSON.stringify({ rowNum: rowNum, orderNumber: orderNumber, text: text }) })
     .then(function(r){ return r.json().then(function(j){ if(!r.ok) throw new Error(j.error||'failed'); }); })
-    .then(function(){ btn.textContent = 'Sent ✓'; setTimeout(function(){ btn.textContent = '💬 Message'; btn.disabled = false; }, 2500); })
-    .catch(function(e){ alert(e.message); btn.disabled = false; });
+    .then(function(){
+      ta.value = '';
+      openNotes[orderNumber] = ''; // clear the saved draft too, not just the field
+      btn.textContent = 'Sent ✓';
+      var st = box.querySelector('.sent');
+      if (st) st.textContent = 'Sent to the customer just now.';
+      setTimeout(function(){ btn.textContent = old; btn.disabled = false; }, 2000);
+    })
+    .catch(function(e){ alert(e.message); btn.textContent = old; btn.disabled = false; });
 }
 
 function card(o){
@@ -4715,8 +4782,32 @@ function card(o){
     var mb = document.createElement('button');
     mb.textContent = '💬 Message';
     mb.className = 'msg';
-    mb.onclick = function(){ messageCustomer(o.rowNum, o.orderNumber, mb); };
+    mb.onclick = function(){ toggleNote(o.orderNumber); };
     btns.appendChild(mb);
+
+    var box = document.createElement('div');
+    box.className = 'notebox';
+    box.id = 'note_' + o.orderNumber;
+    if (openNotes[o.orderNumber] === undefined) box.setAttribute('hidden','');
+    box.innerHTML =
+      '<textarea rows="2" maxlength="600" placeholder="Message the customer — e.g. the one marked [P] has pepper"></textarea>' +
+      '<div class="noterow">' +
+        '<span class="quick">' +
+          '<button type="button" class="chip">The one marked [P] has pepper</button>' +
+          '<button type="button" class="chip">Running about 10 minutes late</button>' +
+          '<button type="button" class="chip">We are out of that — pick another?</button>' +
+        '</span>' +
+        '<button type="button" class="send">Send</button>' +
+      '</div><div class="sent lbl"></div>';
+    var ta = box.querySelector('textarea');
+    if (openNotes[o.orderNumber]) ta.value = openNotes[o.orderNumber]; // restore draft across refreshes
+    ta.addEventListener('input', function(){ openNotes[o.orderNumber] = ta.value; });
+    // Tap a chip to drop common wording in, still editable before sending.
+    box.querySelectorAll('.chip').forEach(function(c){
+      c.onclick = function(){ ta.value = c.textContent; openNotes[o.orderNumber] = ta.value; ta.focus(); };
+    });
+    box.querySelector('.send').onclick = function(){ sendNote(o.rowNum, o.orderNumber, box.querySelector('.send')); };
+    d.appendChild(box);
   }
   return d;
 }
@@ -4730,6 +4821,7 @@ function load(){
     .then(function(data){
       document.getElementById('login').hidden = true;
       document.getElementById('app').hidden = false;
+      snapshotNotes(); // keep half-typed messages alive across the refresh
       var list = document.getElementById('list');
       list.innerHTML = '';
       var orders = data.orders || [];
@@ -4923,7 +5015,8 @@ const DRIVER_HTML = `<!doctype html>
   h1 { font-size:19px; margin:0; font-weight:650; }
   .count { background:var(--out); color:#fff; font-weight:700; border-radius:999px; padding:2px 11px; font-size:15px; }
   .muted { color:var(--dim); font-size:13px; margin-left:auto; }
-  main { padding:14px; display:grid; gap:14px; grid-template-columns:repeat(auto-fill,minmax(320px,1fr)); }
+  main { padding:14px; display:grid; gap:14px;
+         grid-template-columns:repeat(auto-fill,minmax(min(320px,100%),1fr)); }
   .card { background:var(--card); border:1px solid var(--line); border-left:5px solid var(--out);
           border-radius:12px; padding:15px; }
   .top { display:flex; align-items:baseline; gap:10px; }
@@ -4949,6 +5042,19 @@ const DRIVER_HTML = `<!doctype html>
                  border:1px solid var(--line); background:#161923; color:var(--text); }
   #login button { width:100%; background:var(--go); color:#04210f; border-color:transparent; }
   .err { color:#ff9b9b; font-size:14px; min-height:20px; }
+
+  /* This one is used almost entirely on a phone, often one-handed while
+     standing next to a bike — so on small screens every action becomes a
+     full-width target rather than something to aim at. */
+  @media (max-width:640px){
+    header { padding:11px 13px; }
+    h1 { font-size:17px; }
+    main { padding:11px; gap:11px; }
+    .card { padding:13px; }
+    .addr { font-size:17px; }
+    a.btn, button { flex:1 1 100%; text-align:center; font-size:16px; padding:13px 14px; }
+    .btns { gap:9px; }
+  }
 </style>
 </head>
 <body>
@@ -5194,6 +5300,29 @@ const MANAGER_HTML = `<!doctype html>
   #login button { width:100%; font:inherit; font-weight:600; padding:11px; border:none;
                   border-radius:8px; background:var(--good); color:#04210f; cursor:pointer; }
   .err { color:#ff9b9b; font-size:14px; min-height:20px; }
+
+  /* Tablet and phone. The header holds a title, a status pill, a
+     pause button, four tabs and a timestamp, so it must wrap; the tab strip
+     scrolls sideways rather than stacking into a tall block. */
+  @media (max-width:820px){
+    header { flex-wrap:wrap; gap:9px; padding:11px 13px; }
+    h1 { font-size:17px; }
+    .muted { margin-left:0; width:100%; }
+    .tabs { width:100%; overflow-x:auto; padding-bottom:2px; -webkit-overflow-scrolling:touch; }
+    .tab { flex:0 0 auto; }
+    main { padding:12px; }
+    h2 { margin:20px 0 9px; }
+    .tile .v { font-size:23px; }
+    /* Menu editor: name on its own line, then the price fields and actions
+       below it, so nothing gets squeezed to an unusable width. */
+    .row { gap:8px; }
+    .row .nm { flex:1 1 100%; min-width:0; }
+    .row input { width:80px; font-size:16px; }  /* 16px stops iOS zooming on focus */
+    .row button { flex:1 1 auto; padding:9px 12px; }
+  }
+  @media (max-width:440px){
+    .tiles { grid-template-columns:repeat(auto-fit,minmax(min(140px,100%),1fr)); }
+  }
 </style>
 </head>
 <body>
