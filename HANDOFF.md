@@ -3,6 +3,10 @@
 Read this before doing anything else. This is context a fresh Claude session
 (or a fresh developer) won't have from the code alone.
 
+See `CHANGELOG.md` for what changed recently and why — several decisions in
+this codebase look arbitrary without the reason behind them, and it records
+the bugs that motivated the guards you'll find scattered through `index.js`.
+
 ## This is live in production, not a demo
 
 This is a WhatsApp food-ordering bot for a real business — **Créme De La
@@ -66,6 +70,41 @@ number's own ID*, not the WABA (WhatsApp Business Account) ID. Chakra's
 side by side with different IDs — it's easy to copy the wrong one, and this
 cost a long debugging saga previously (silent "not connected" failures).
 
+## Staff dashboards (added 2026-08-28)
+
+Three web dashboards served by the same Express app, each behind its OWN
+password so a credential only opens what that role needs. All are day/night
+themeable and work on phone, tablet and desktop. Passwords live in Railway
+env vars — never in git.
+
+| Board | Path | Env var | Who it's for |
+|---|---|---|---|
+| Kitchen | `/kitchen` | `KITCHEN_PASSWORD` | Order queue, status buttons, message a customer |
+| Manager | `/manager` | `MANAGER_PASSWORD` | Sales, menu editing, live conversations, customers, pause orders |
+| Driver | `/driver` | `DRIVER_PASSWORD` | Active deliveries, navigate, tap-to-call, mark delivered |
+
+Design rules these follow — keep them if you extend:
+
+- **They are a VIEW over the Manager sheet, not a second store.** Status
+  changes write to `Manager!H`, and the existing `pollOrderStatus` job then
+  notifies the customer, so a dashboard tap and a manual sheet edit behave
+  identically. Editing the sheet by hand still works exactly as before.
+- **Menu edits write through to the Availability sheet**, because
+  `refreshMenuFromSheet` reads that sheet back over memory every 2 minutes
+  and would otherwise silently undo the change.
+- **Every status/message write re-reads the row and checks the order number
+  still matches** before writing (409 otherwise). Staff reorder and delete
+  Manager rows routinely; a row number captured seconds ago can already
+  point at a different order, and writing blind would update — or text — a
+  stranger.
+- **The driver's status whitelist is deliberately narrower** than the
+  kitchen's: `Out for Delivery` and `Completed` only.
+- **`PUBLIC_BASE_URL`** (or Railway's `RAILWAY_PUBLIC_DOMAIN`) is what puts
+  the tap-through dashboard link into staff notifications.
+
+Covered by `test/dashboards.test.js` — 12 offline tests including
+cross-board password rejection and the shifted-row guards.
+
 ## Feature status
 
 All of a prior internal roadmap's Phases 1, 2, 3, and 5 are shipped and live
@@ -78,8 +117,42 @@ Voice-note ordering **is** built and live (`transcribeVoiceNote()` — Gemini
 audio in, transcript through the same text-parsing path). An earlier version
 of this file listed it as not started; that was wrong.
 
-**Not built:** kitchen ticket/printer integration — blocked on the owner
-specifying what hardware/service they'd actually use. Don't guess.
+Also live since: photo recognition (send a picture of a drink, Gemini matches
+it against the real menu), shared-location delivery addresses, an optional
+delivery-landmark step (typed, spoken, or a photo of the gate that Gemini
+describes for the driver), craving/recommendation replies, natural-language
+command aliases, and a one-time checkout upsell.
+
+**Not built:**
+
+- **Kitchen ticket / printer** — blocked on the owner specifying what
+  hardware they actually have. Note the constraint: the bot runs on Railway
+  (cloud) and *cannot* reach a printer on the shop's LAN. It needs either a
+  cloud print service (PrintNode, Star CloudPRNT) or a small agent running
+  at the shop. Printer age barely matters — if it prints a Windows test
+  page, it works.
+- **Menu photos / WhatsApp catalog** — blocked on the owner supplying
+  photos. Worth knowing before building: WhatsApp's native cart has **no
+  per-item customization field**, so a straight swap would LOSE the
+  per-item notes ("no onions") that currently reach the kitchen. The sane
+  shape is catalog-for-browsing, existing cart for customization.
+- **Add/remove menu items from the dashboard** — prices, renames and
+  sold-out toggles are done; creating and discontinuing items still goes
+  through the Availability sheet's row-ID contract, which has real footguns.
+
+## Known gaps worth fixing before advertising
+
+1. **`DRIVER_NUMBERS` and `OWNER_NUMBERS` are both the shop's own phone**
+   (`5016162492`). No actual driver is being notified — every delivery ping
+   lands on the shop handset and someone relays it by hand. This breaks
+   exactly when volume arrives.
+2. **No external uptime monitor.** `alertOwner` rides the same WhatsApp
+   channel it would need to report on, so a Chakra/WhatsApp outage is
+   silent. A free UptimeRobot pinging `/` would close it.
+3. **Sessions are in memory.** A deploy or crash drops in-flight carts
+   (saved carts survive to the sheet; a cart mid-order does not).
+4. **Cash only, no POS integration** — fine at current scale, worth
+   revisiting with volume.
 
 ## In-flight work at handoff time
 
@@ -186,6 +259,17 @@ off the item's index. `test/menu-sheet.test.js` pins this.
 - Confirm with whoever's driving before any real Sheets write or real
   WhatsApp send during testing.
 
+## Repo / branch layout
+
+Local `master` is pushed to the **`bot`** branch of
+`github.com/20automation04-boop/creme-de-la-creme`. The repo's `main` branch
+is unrelated content (a README and a different "taste" skill) and shares no
+history with this project — don't merge them expecting a common ancestor.
+
+Deploys are still a manual `railway up --detach` from this directory, and
+run from the WORKING DIRECTORY, not from git. Committing does not deploy,
+and deploying does not require committing — keep them in step yourself.
+
 ## Known past incidents worth knowing about
 
 - A stale duplicate Manager-sheet row sharing an order number with a real
@@ -194,6 +278,23 @@ off the item's index. `test/menu-sheet.test.js` pins this.
   row position / `orderNumber|timestamp` instead of order number alone —
   but staff manually reordering/deleting Manager sheet rows is routine, so
   any *new* code that keys off row identity needs to account for that.
+- **Stale button taps.** WhatsApp never expires interactive messages, so a
+  customer can tap a button from days ago. Bare-word button ids were being
+  swallowed as free text: a stale "Done" tap became an item's kitchen note
+  (`Vanilla Bean [done] x2`), and at the address step it became the literal
+  delivery address AND was saved to the customer's profile. Fixed by
+  rejecting interactive taps wherever free text is the expected *answer*
+  (notes, address, quantity, delivery-landmark). Any NEW step that accepts
+  free text needs the same guard.
+- **Silent rate-limit drops.** The per-sender limit was 20/min with no reply
+  on breach; a customer tapping quickly through a normal order blew past it
+  and the bot simply went quiet mid-order. Now 60/min, and a breach sends
+  one friendly notice instead of silence. Rapid identical taps are also
+  debounced (1.2s) since they arrive as different message ids.
+- **Accented commands.** Literals here are precomposed (NFC) but phone
+  keyboards can emit decomposed (NFD) — a correctly-typed "atrás" matched
+  nothing. `rawMsg` is normalized once at entry; don't compare un-normalized
+  text.
 - `logOrderToSheets` and `saveCustomerProfile` both do read-next-row-then-
   write against a shared Sheet; a per-sender lock alone isn't enough because
   two *different* customers confirming near-simultaneously could clobber
