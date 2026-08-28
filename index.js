@@ -1048,6 +1048,64 @@ function findMenuItemByName(query) {
 // in-memory for this process's lifetime even if the write-through fails,
 // same "never let Sheets flakiness break the live path" principle as
 // everywhere else in this file.
+// Renames / re-prices an item from the manager dashboard. Same contract as
+// setItemAvailability: update memory immediately so the change is live for
+// the very next customer, and write through to the Availability sheet so it
+// survives refreshMenuFromSheet's 2-minute cycle (which reads the sheet back
+// over memory). Editing the sheet by hand still works exactly as before —
+// this is a second door onto the same room, not a replacement.
+async function updateMenuItemFields(categoryId, itemIndex, { name, price, largePrice }) {
+  const cat = MENU.find(c => c.id === categoryId);
+  const item = cat && cat.items[itemIndex - 1];
+  if (!item) throw new Error('unknown item');
+
+  if (name) item.name = name;
+  if (Number.isFinite(price) && price > 0) {
+    if (item.sizes) item.sizes[0].price = price;
+    else item.price = price;
+  }
+  if (Number.isFinite(largePrice) && largePrice > 0 && item.sizes && item.sizes[1]) {
+    item.sizes[1].price = largePrice;
+  }
+
+  if (!process.env.GOOGLE_SHEETS_ID) return;
+  const key = itemKey(categoryId, itemIndex);
+  await withSessionLock('__sheets_availability_write__', async () => {
+    const res = await withTimeout(sheets.spreadsheets.values.get({
+      spreadsheetId: process.env.GOOGLE_SHEETS_ID,
+      range: 'Availability!A2:A',
+    }), 8000);
+    const rows = res.data.values || [];
+    const rowIndex = rows.findIndex(r => (r[0] || '').trim() === key);
+    if (rowIndex < 0) throw new Error('This item has no row in the Availability sheet yet.');
+    const rowNum = rowIndex + 2;
+    if (name) {
+      await withTimeout(sheets.spreadsheets.values.update({
+        spreadsheetId: process.env.GOOGLE_SHEETS_ID,
+        range: `Availability!C${rowNum}`,
+        valueInputOption: 'USER_ENTERED',
+        requestBody: { values: [[name]] },
+      }), 6000);
+    }
+    if (Number.isFinite(price) && price > 0) {
+      await withTimeout(sheets.spreadsheets.values.update({
+        spreadsheetId: process.env.GOOGLE_SHEETS_ID,
+        range: `Availability!E${rowNum}`,
+        valueInputOption: 'USER_ENTERED',
+        requestBody: { values: [[price]] },
+      }), 6000);
+    }
+    if (Number.isFinite(largePrice) && largePrice > 0) {
+      await withTimeout(sheets.spreadsheets.values.update({
+        spreadsheetId: process.env.GOOGLE_SHEETS_ID,
+        range: `Availability!F${rowNum}`,
+        valueInputOption: 'USER_ENTERED',
+        requestBody: { values: [[largePrice]] },
+      }), 6000);
+    }
+  });
+}
+
 async function setItemAvailability(categoryId, itemIndex, available) {
   const key = itemKey(categoryId, itemIndex);
   if (available) soldOutIds.delete(key); else soldOutIds.add(key);
@@ -4876,6 +4934,25 @@ const MANAGER_HTML = `<!doctype html>
   ul.plain li { background:var(--card); border:1px solid var(--line); border-radius:8px;
                 padding:9px 12px; margin-bottom:7px; font-size:14px; }
   .empty { color:var(--dim); font-size:14px; }
+  .tabs { display:flex; gap:6px; }
+  .tab { font:inherit; font-size:14px; font-weight:600; padding:7px 13px; border-radius:8px;
+         border:1px solid var(--line); background:#222735; color:var(--dim); cursor:pointer; }
+  .tab.on { background:var(--accent); border-color:transparent; color:#fff; }
+  .ghost { font:inherit; font-size:13px; font-weight:600; padding:6px 12px; border-radius:8px;
+           border:1px solid var(--line); background:#222735; color:var(--text); cursor:pointer; }
+  .cat { margin-bottom:18px; }
+  .cat h3 { font-size:15px; margin:0 0 8px; }
+  .row { display:flex; align-items:center; gap:10px; background:var(--card); border:1px solid var(--line);
+         border-radius:9px; padding:9px 12px; margin-bottom:6px; flex-wrap:wrap; }
+  .row.out { opacity:.55; }
+  .row .nm { flex:1; min-width:130px; font-size:14px; }
+  .row input { width:74px; font:inherit; font-size:14px; padding:6px 8px; border-radius:7px;
+               border:1px solid var(--line); background:#161923; color:var(--text); }
+  .row .lbl { font-size:11px; color:var(--dim); }
+  .row button { font:inherit; font-size:13px; font-weight:600; padding:7px 11px; border-radius:7px;
+                border:1px solid var(--line); background:#252a36; color:var(--text); cursor:pointer; }
+  .row button.save { background:var(--good); color:#04210f; border-color:transparent; }
+  .row button.out { background:#3a2020; color:#ffc9c9; border-color:#5a2b2b; }
   #login { max-width:340px; margin:16vh auto; padding:26px; background:var(--card);
            border:1px solid var(--line); border-radius:12px; }
   #login input { width:100%; font:inherit; padding:12px; margin:12px 0; border-radius:8px;
@@ -4894,14 +4971,38 @@ const MANAGER_HTML = `<!doctype html>
 </div>
 
 <div id="app" hidden>
-  <header><h1>Manager</h1><span id="paused"></span><span class="muted" id="updated">—</span></header>
+  <header>
+    <h1>Manager</h1>
+    <span id="paused"></span>
+    <button class="ghost" id="pauseBtn" onclick="togglePause()">—</button>
+    <span class="tabs">
+      <button class="tab on" data-tab="overview" onclick="showTab('overview')">Overview</button>
+      <button class="tab" data-tab="menu" onclick="showTab('menu')">Menu</button>
+      <button class="tab" data-tab="customers" onclick="showTab('customers')">Customers</button>
+    </span>
+    <span class="muted" id="updated">—</span>
+  </header>
   <main>
-    <div class="tiles" id="tiles"></div>
-    <h2>Top items</h2><ul class="plain" id="top"></ul>
-    <h2>Sold out now</h2><ul class="plain" id="soldout"></ul>
-    <h2>Recent orders</h2><div class="scroll"><table>
-      <thead><tr><th>#</th><th>When</th><th>Items</th><th>Total</th><th>Type</th><th>Status</th></tr></thead>
-      <tbody id="rows"></tbody></table></div>
+    <section id="tab-overview">
+      <div class="tiles" id="tiles"></div>
+      <h2>Top items</h2><ul class="plain" id="top"></ul>
+      <h2>Sold out now</h2><ul class="plain" id="soldout"></ul>
+      <h2>Recent orders</h2><div class="scroll"><table>
+        <thead><tr><th>#</th><th>When</th><th>Items</th><th>Total</th><th>Type</th><th>Status</th></tr></thead>
+        <tbody id="rows"></tbody></table></div>
+    </section>
+
+    <section id="tab-menu" hidden>
+      <h2>Menu — tap to edit price or mark sold out</h2>
+      <div id="menu"></div>
+    </section>
+
+    <section id="tab-customers" hidden>
+      <h2>Saved customers</h2>
+      <div class="scroll"><table>
+        <thead><tr><th>Phone</th><th>Saved address</th><th>Notes</th><th>Updated</th></tr></thead>
+        <tbody id="custRows"></tbody></table></div>
+    </section>
   </main>
 </div>
 
@@ -4928,8 +5029,7 @@ function load(){
     document.getElementById('login').hidden=true;
     document.getElementById('app').hidden=false;
     document.getElementById('updated').textContent='updated '+new Date().toLocaleTimeString();
-    document.getElementById('paused').innerHTML = d.ordersPaused
-      ? '<span class="pill off">ORDERS PAUSED</span>' : '<span class="pill on">TAKING ORDERS</span>';
+    paused = d.ordersPaused; renderPause();
 
     document.getElementById('tiles').innerHTML =
       tile("Today's orders", d.todayCount) +
@@ -4960,12 +5060,154 @@ function load(){
   }).catch(function(e){ if(e.message!=='auth') console.error(e); });
 }
 
+var currentTab='overview', paused=false;
+
+function showTab(t){
+  currentTab=t;
+  ['overview','menu','customers'].forEach(function(x){
+    document.getElementById('tab-'+x).hidden = (x!==t);
+  });
+  document.querySelectorAll('.tab').forEach(function(b){
+    b.classList.toggle('on', b.getAttribute('data-tab')===t);
+  });
+  if(t==='menu') loadMenu();
+  if(t==='customers') loadCustomers();
+}
+
+function togglePause(){
+  fetch('/manager/pause',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({paused:!paused})})
+   .then(function(r){return r.json();})
+   .then(function(j){ paused=j.ordersPaused; renderPause(); })
+   .catch(function(e){ alert(e.message); });
+}
+
+function renderPause(){
+  document.getElementById('paused').innerHTML = paused
+    ? '<span class="pill off">ORDERS PAUSED</span>' : '<span class="pill on">TAKING ORDERS</span>';
+  document.getElementById('pauseBtn').textContent = paused ? 'Resume orders' : 'Pause orders';
+}
+
+function saveItem(catId, idx, body, btn, label){
+  btn.disabled=true; var old=btn.textContent; btn.textContent='…';
+  body.categoryId=catId; body.itemIndex=idx;
+  fetch('/manager/item',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify(body)})
+   .then(function(r){ return r.json().then(function(j){ if(!r.ok) throw new Error(j.error||'failed'); }); })
+   .then(function(){ btn.textContent=label||'Saved ✓'; setTimeout(function(){ loadMenu(); },700); })
+   .catch(function(e){ alert(e.message); btn.textContent=old; btn.disabled=false; });
+}
+
+function loadMenu(){
+  fetch('/manager/menu').then(function(r){return r.json();}).then(function(d){
+    document.getElementById('menu').innerHTML = (d.categories||[]).map(function(c){
+      return '<div class="cat"><h3>'+esc(c.category)+'</h3>'+c.items.map(function(it){
+        var id='f_'+c.id+'_'+it.itemIndex;
+        return '<div class="row'+(it.soldOut?' out':'')+'">'+
+          '<span class="nm">'+esc(it.name)+(it.soldOut?' <span class="lbl">— SOLD OUT</span>':'')+'</span>'+
+          '<span class="lbl">'+(it.sized?'Reg':'Price')+'</span>'+
+          '<input id="'+id+'_p" type="number" step="0.25" min="0" value="'+it.price+'">'+
+          (it.sized?'<span class="lbl">Lg</span><input id="'+id+'_l" type="number" step="0.25" min="0" value="'+(it.largePrice||'')+'">':'')+
+          '<button class="save" onclick="savePrice(\\''+c.id+'\\','+it.itemIndex+',\\''+id+'\\','+it.sized+',this)">Save</button>'+
+          '<button class="'+(it.soldOut?'':'out')+'" onclick="saveItem(\\''+c.id+'\\','+it.itemIndex+',{available:'+(it.soldOut?'true':'false')+'},this)">'+
+            (it.soldOut?'Back in stock':'Sold out')+'</button>'+
+        '</div>';
+      }).join('')+'</div>';
+    }).join('') || '<div class="empty">No menu loaded.</div>';
+  }).catch(function(e){ console.error(e); });
+}
+
+function savePrice(catId, idx, fieldId, sized, btn){
+  var body={ price: document.getElementById(fieldId+'_p').value };
+  if(sized){ var l=document.getElementById(fieldId+'_l'); if(l && l.value) body.largePrice=l.value; }
+  saveItem(catId, idx, body, btn);
+}
+
+function loadCustomers(){
+  fetch('/manager/customers').then(function(r){return r.json();}).then(function(d){
+    document.getElementById('custRows').innerHTML = (d.customers||[]).map(function(c){
+      return '<tr><td>'+esc(c.phone)+'</td><td class="items">'+esc(c.savedAddress)+
+        '</td><td class="items">'+esc(c.notes)+'</td><td>'+esc(c.updatedAt)+'</td></tr>';
+    }).join('') || '<tr><td colspan="4" class="empty">No saved customers yet.</td></tr>';
+  }).catch(function(e){ console.error(e); });
+}
+
 load();
-setInterval(load, 30000);
+setInterval(function(){ if(currentTab==='overview') load(); }, 30000);
 document.getElementById('pw').addEventListener('keydown',function(e){ if(e.key==='Enter') login(); });
 </script>
 </body>
 </html>`;
+
+// Full menu with live availability + prices, for the Menu tab.
+app.get('/manager/menu', (req, res) => {
+  if (!requireManagerAuth(req, res)) return;
+  const categories = MENU.map(cat => ({
+    id: cat.id,
+    category: cat.category,
+    items: cat.items.map((item, i) => ({
+      itemIndex: i + 1,
+      name: item.name,
+      price: item.sizes ? item.sizes[0].price : item.price,
+      largePrice: item.sizes && item.sizes[1] ? item.sizes[1].price : null,
+      sized: Boolean(item.sizes),
+      soldOut: isItemSoldOut(cat.id, i + 1),
+    })),
+  }));
+  res.json({ categories });
+});
+
+app.get('/manager/customers', (req, res) => {
+  if (!requireManagerAuth(req, res)) return;
+  const customers = Object.entries(customerProfiles).map(([phone, p]) => ({
+    phone,
+    savedAddress: p.savedAddress || '',
+    notes: p.notes || '',
+    updatedAt: p.updatedAt || '',
+  }));
+  res.json({ customers });
+});
+
+app.post('/manager/pause', (req, res) => {
+  if (!requireManagerAuth(req, res)) return;
+  ordersPaused = Boolean(req.body && req.body.paused);
+  console.log(`Manager dashboard: orders ${ordersPaused ? 'PAUSED' : 'resumed'}`);
+  res.json({ ok: true, ordersPaused });
+});
+
+// One endpoint for availability, price and name — they all land in the same
+// Availability row, and doing them together keeps the sheet write count down.
+app.post('/manager/item', async (req, res) => {
+  if (!requireManagerAuth(req, res)) return;
+  const { categoryId, itemIndex, available, price, largePrice, name } = req.body || {};
+  const cat = MENU.find(c => c.id === String(categoryId));
+  const item = cat && cat.items[Number(itemIndex) - 1];
+  if (!item) return res.status(400).json({ error: 'unknown item' });
+
+  // Reject rather than silently coerce — a mistyped price here changes what
+  // real customers are charged.
+  const p = price === undefined || price === null || price === '' ? null : Number(price);
+  const lp = largePrice === undefined || largePrice === null || largePrice === '' ? null : Number(largePrice);
+  if (p !== null && (!Number.isFinite(p) || p <= 0)) return res.status(400).json({ error: 'price must be a positive number' });
+  if (lp !== null && (!Number.isFinite(lp) || lp <= 0)) return res.status(400).json({ error: 'large price must be a positive number' });
+  const newName = typeof name === 'string' && name.trim() ? name.trim().slice(0, 60) : null;
+
+  try {
+    if (typeof available === 'boolean') {
+      await setItemAvailability(String(categoryId), Number(itemIndex), available);
+    }
+    if (p !== null || lp !== null || newName) {
+      await updateMenuItemFields(String(categoryId), Number(itemIndex), {
+        name: newName, price: p, largePrice: lp,
+      });
+    }
+    console.log(`Manager dashboard: updated ${categoryId}.${itemIndex}`);
+    res.json({ ok: true });
+  } catch (err) {
+    console.error('Manager item update failed:', err.message || err);
+    res.status(500).json({ error: err.message || 'could not update item' });
+  }
+});
 
 app.get('/manager', (req, res) => {
   if (!process.env.MANAGER_PASSWORD) {
