@@ -342,9 +342,16 @@ async function notifyDriver(orderNumber, session, from) {
     ? (session.language === 'es' ? `\n\n⚠️ *Nota del cliente:* ${note}` : `\n\n⚠️ *Customer note:* ${note}`)
     : '';
 
+  // Landmark/instructions the customer gave at the deliveryNote step —
+  // typed, spoken, or described from a photo of their gate/house. Placed
+  // right under the address, which is where a driver is actually looking.
+  const findMeTag = session.deliveryNote
+    ? (session.language === 'es' ? `\n🏠 *Cómo encontrarlo:* ${session.deliveryNote}` : `\n🏠 *Finding it:* ${session.deliveryNote}`)
+    : '';
+
   const message = preorderTag + (session.language === 'es'
-    ? `🏍️ *NUEVA ORDEN DE ENTREGA #${orderNumber}*\n${divider}\n🛍️ *Artículos:*\n${itemLines}\n${divider}\n💵 *Total a cobrar: $${total} BZD*\n\n📍 *Entregar a:*\n${session.address}\n📞 *Teléfono del cliente:* +${from}${noteTag}`
-    : `🏍️ *NEW DELIVERY ORDER #${orderNumber}*\n${divider}\n🛍️ *Items:*\n${itemLines}\n${divider}\n💵 *Total to collect: $${total} BZD*\n\n📍 *Deliver to:*\n${session.address}\n📞 *Customer phone:* +${from}${noteTag}`);
+    ? `🏍️ *NUEVA ORDEN DE ENTREGA #${orderNumber}*\n${divider}\n🛍️ *Artículos:*\n${itemLines}\n${divider}\n💵 *Total a cobrar: $${total} BZD*\n\n📍 *Entregar a:*\n${session.address}${findMeTag}\n📞 *Teléfono del cliente:* +${from}${noteTag}`
+    : `🏍️ *NEW DELIVERY ORDER #${orderNumber}*\n${divider}\n🛍️ *Items:*\n${itemLines}\n${divider}\n💵 *Total to collect: $${total} BZD*\n\n📍 *Deliver to:*\n${session.address}${findMeTag}\n📞 *Customer phone:* +${from}${noteTag}`);
 
   await notifyAllDrivers(message);
 }
@@ -470,7 +477,11 @@ async function logOrderToSheets(orderNumber, session, from) {
   }).join('; ');
 
   const total = session.cart.reduce((sum, i) => sum + i.price * i.qty, 0).toFixed(2);
-  const modeText = (session.mode === 'delivery' ? `Delivery - ${session.address}` : 'Pickup') + (session.isPreorder ? ' [PRE-ORDER]' : '');
+  // The delivery note rides along in the mode cell so staff reading the
+  // sheet (or the kitchen dashboard, which renders this same field) see the
+  // landmark info without needing a new column.
+  const findMe = session.mode === 'delivery' && session.deliveryNote ? ` (${session.deliveryNote})` : '';
+  const modeText = (session.mode === 'delivery' ? `Delivery - ${session.address}${findMe}` : 'Pickup') + (session.isPreorder ? ' [PRE-ORDER]' : '');
   // `from` is bare digits (Meta/Chakra format, no '+'). Store it human-readable
   // with a '+' — the leading apostrophe forces Sheets to keep it as text
   // instead of trying to evaluate "+50161234567" as a formula.
@@ -1384,11 +1395,14 @@ Need help? Type *help* anytime.`,
     noneButtonTitle: 'None ✅',
     helpButtonTitle: 'How to order 💡',
     quickCommands: 'You can also just type:\n*menu* — see the menu\n*cart* — see your order\n*done* — checkout\n*repeat* — reorder your last order\n*agent* — talk to a person',
+    askDeliveryNote: "🏠 Anything that helps our driver find you? A landmark, gate colour, house number — you can type it, send a voice note 🎙️, or even a photo 📷 of the place.\n\nTap *Skip* if it's easy to find.",
+    skipButtonTitle: 'Skip ⏭️',
+    deliveryNoteSaved: "Got it — I'll pass that to the driver. 🏍️",
     cartEmptyCheckout: "Cart's empty — pick something first!",
     cartFull: `Your cart's got a LOT going on already (${MAX_CART_LINES} different items!) — let's get this order checked out before adding more. Type *done* whenever you're ready!`,
     askMode: (fee) => `Pickup 📦 or delivery 🏍️? (Delivery is $${fee} BZD)`,
     pickupConfirm: '📦 Pickup order. Confirm? (yes/no)',
-    askAddress: (fee) => `🏍️ What's the delivery address 📍 and a contact number?\n(Delivery fee: $${fee} BZD)`,
+    askAddress: (fee) => `🏍️ What's the delivery address 📍 and a contact number?\n\n💡 Tip: you can share your location instead — tap 📎 → Location. It helps our driver find you faster!\n(Delivery fee: $${fee} BZD)`,
     deliveryConfirm: (addr) => `🏍️ Delivery to: ${addr}\n\nConfirm order? (yes/no)`,
     askModeInvalid: 'Pickup or delivery — which one?',
     orderConfirmed: (num, phone) => `🎉 Order #${num} confirmed! Thank you!\n\nWe'll be in touch shortly.\n\n📞 Need anything else? Call us at ${phone}.`,
@@ -1482,11 +1496,14 @@ Need help? Type *help* anytime.`,
     noneButtonTitle: 'Ninguna ✅',
     helpButtonTitle: 'Cómo ordenar 💡',
     quickCommands: 'También puedes escribir:\n*menú* — ver el menú\n*carrito* — ver tu orden\n*listo* — finalizar\n*repetir* — repetir tu última orden\n*agente* — hablar con una persona',
+    askDeliveryNote: '🏠 ¿Algo que ayude al repartidor a encontrarte? Un punto de referencia, color del portón, número de casa — puedes escribirlo, mandar una nota de voz 🎙️, o hasta una foto 📷 del lugar.\n\nToca *Omitir* si es fácil de encontrar.',
+    skipButtonTitle: 'Omitir ⏭️',
+    deliveryNoteSaved: 'Listo — se lo pasamos al repartidor. 🏍️',
     cartEmptyCheckout: '¡Carrito vacío, elige algo primero!',
     cartFull: `Tu carrito ya tiene bastante (¡${MAX_CART_LINES} artículos distintos!) — finalicemos esta orden antes de añadir más. ¡Escribe *listo* cuando estés listo!`,
     askMode: (fee) => `¿Recoger 📦 o entrega 🏍️? (La entrega cuesta $${fee} BZD)`,
     pickupConfirm: '📦 Orden para recoger. ¿Confirmas? (si/no)',
-    askAddress: (fee) => `🏍️ ¿Cuál es la dirección de entrega 📍 y un número de contacto?\n(Costo de entrega: $${fee} BZD)`,
+    askAddress: (fee) => `🏍️ ¿Cuál es la dirección de entrega 📍 y un número de contacto?\n\n💡 Tip: puedes compartir tu ubicación — toca 📎 → Ubicación. ¡Así el repartidor te encuentra más rápido!\n(Costo de entrega: $${fee} BZD)`,
     deliveryConfirm: (addr) => `🏍️ Entrega a: ${addr}\n\n¿Confirmas la orden? (si/no)`,
     askModeInvalid: '¿Recoger o entrega — cuál prefieres?',
     orderConfirmed: (num, phone) => `🎉 ¡Orden #${num} confirmada! ¡Gracias!\n\nNos pondremos en contacto pronto.\n\n📞 ¿Necesitas algo más? Llámanos al ${phone}.`,
@@ -1572,6 +1589,7 @@ function newSession() {
     pendingItemIndex: null,
     mode: null,
     address: null,
+    deliveryNote: '', // landmark/instructions for the driver — optional, delivery orders only
     lastMessageAt: Date.now(),
     nudgeStage: 0, // 0 = none sent, 1 = ~3min nudge sent, 2 = ~10min hold sent — see sweepIdleSessions()
     pendingResume: false, // true right after a saved cart is offered back to the customer
@@ -2440,6 +2458,22 @@ function notesButtonsMessage(lang) {
 // 'item' steps — see the case blocks below). Browsing other categories still
 // has its own buttons via the categoryList/categoryItems message that's
 // always sent right after this one; this only adds the missing checkout tap.
+// Optional landmark/instructions step for deliveries only. One tap to skip,
+// so it costs a customer who doesn't need it a single button press — the
+// address itself is already captured by this point, so nothing here can
+// block checkout.
+function deliveryNoteMessage(lang) {
+  const t = TXT[lang];
+  const body = t.askDeliveryNote;
+  return {
+    buttons: {
+      body,
+      buttons: [{ id: 'skip', title: t.skipButtonTitle }],
+    },
+    fallback: body,
+  };
+}
+
 function confirmNudgeMessage(lang) {
   const t = TXT[lang];
   const body = t.askConfirmNudge;
@@ -2648,27 +2682,116 @@ function buildMenuListingForAI() {
 // then fed through the EXACT SAME pipeline a typed message goes through
 // (attemptFreeOrder, interpretMessage, etc.) — no separate order-matching
 // logic needed for voice.
-async function transcribeVoiceNote(mediaId, mimeType) {
+// Shared by voice notes and photos — same endpoint, same auth, only the
+// media id differs.
+async function downloadWhatsAppMedia(mediaId, mimeType, label) {
   const mediaUrl = `https://api.chakrahq.com/v1/whatsapp/${CHAKRA_API_VERSION}/media/${mediaId}/show`;
-  const audioRes = await withTimeout(fetch(mediaUrl, {
+  const res = await withTimeout(fetch(mediaUrl, {
     headers: { Authorization: `Bearer ${CHAKRA_API_KEY}` },
   }), 10000);
-  if (!audioRes.ok) throw new Error(`Failed to download voice note (HTTP ${audioRes.status})`);
-  const audioBuffer = Buffer.from(await audioRes.arrayBuffer());
-  const base64Audio = audioBuffer.toString('base64');
-  // WhatsApp sometimes appends codec params, e.g. "audio/ogg; codecs=opus" —
-  // Gemini expects a clean MIME type.
-  const cleanMimeType = (mimeType || '').split(';')[0].trim();
+  if (!res.ok) throw new Error(`Failed to download ${label} (HTTP ${res.status})`);
+  const buffer = Buffer.from(await res.arrayBuffer());
+  return {
+    data: buffer.toString('base64'),
+    // WhatsApp sometimes appends codec params, e.g. "audio/ogg; codecs=opus" —
+    // Gemini expects a clean MIME type.
+    mimeType: (mimeType || '').split(';')[0].trim(),
+  };
+}
 
+async function transcribeVoiceNote(mediaId, mimeType) {
+  const { data, mimeType: clean } = await downloadWhatsAppMedia(mediaId, mimeType, 'voice note');
   const result = await withTimeout(genAI.models.generateContent({
     model: 'gemini-3.1-flash-lite',
     contents: [
       { text: 'Transcribe this voice message exactly as spoken, in whatever language it is (English or Spanish). Respond with ONLY the transcription text — no commentary, no quotation marks, no translation.' },
-      { inlineData: { mimeType: cleanMimeType, data: base64Audio } },
+      { inlineData: { mimeType: clean, data } },
     ],
   }), 25000);
 
   return (result.text || '').trim();
+}
+
+// A photo sent at the delivery-note step is the customer's HOUSE or a
+// landmark, not food — so it's described for the driver rather than matched
+// against the menu. The description is what actually reaches the driver;
+// the photo itself isn't re-sent, since inbound media ids belong to the
+// customer's upload and aren't re-sendable from our account.
+async function describePhotoForDriver(mediaId, mimeType, caption) {
+  const { data, mimeType: clean } = await downloadWhatsAppMedia(mediaId, mimeType, 'photo');
+  const prompt = `A food-delivery customer sent this photo to help the driver find their address${caption ? ` with the caption: "${caption}"` : ''}.
+
+Describe ONLY what would help a driver recognise the place: building colour, gate, door, signage, house number, notable landmarks nearby.
+
+Rules:
+- Maximum 25 words, one sentence, plain text.
+- Do NOT describe people, or guess an address/street name that isn't visibly written.
+- If the photo shows nothing useful for finding a place, reply exactly: NONE`;
+
+  const result = await withTimeout(genAI.models.generateContent({
+    model: 'gemini-3.1-flash-lite',
+    contents: [{ text: prompt }, { inlineData: { mimeType: clean, data } }],
+    config: { temperature: 0 },
+  }), 25000);
+
+  const text = (result.text || '').trim();
+  if (!text || /^none$/i.test(text)) return '';
+  return text.slice(0, 200);
+}
+
+// ---- PHOTO RECOGNITION ----
+// A customer photographs a drink/dish (a friend's order, a printed menu, a
+// social post) and asks "this one". Gemini is shown the photo alongside the
+// real menu and asked to name the closest item — strictly, so a photo of
+// something we don't sell comes back as no match instead of a confident
+// wrong guess that lands the wrong food in a real order.
+//
+// Returns { itemName, confident, description } — itemName is always a name
+// copied from OUR menu, never invented.
+async function identifyItemFromPhoto(mediaId, mimeType, caption) {
+  const { data, mimeType: clean } = await downloadWhatsAppMedia(mediaId, mimeType, 'photo');
+  const menuListing = buildMenuListingForAI();
+
+  const prompt = `A customer of a Belize drinks/food shop sent this photo${caption ? ` with the caption: "${caption}"` : ''}.
+
+Our exact menu (categoryId.itemIndex | category | name | price):
+${menuListing}
+
+Decide which SINGLE menu item the photo most likely shows.
+
+Rules:
+- "name" MUST be copied character-for-character from the menu above. Never invent an item.
+- Set "confident" true ONLY if the photo clearly shows that item or something unmistakably equivalent.
+- If the photo is unclear, shows food we don't sell, or is not food at all, set "name" to null and "confident" to false.
+- "description" is a SHORT neutral description of what you actually see (max 12 words), used to talk back to the customer.
+
+Respond with ONLY raw JSON, no markdown:
+{"name": "Mango", "confident": true, "description": "a bright orange frozen mango drink"}`;
+
+  const result = await withTimeout(genAI.models.generateContent({
+    model: 'gemini-3.1-flash-lite',
+    contents: [{ text: prompt }, { inlineData: { mimeType: clean, data } }],
+    config: { temperature: 0 },
+  }), 25000);
+
+  const raw = (result.text || '').trim().replace(/^```(?:json)?|```$/g, '').trim();
+  let parsed;
+  try {
+    parsed = JSON.parse(raw);
+  } catch (err) {
+    console.warn('Photo recognition returned unparseable JSON:', raw.slice(0, 200));
+    return { itemName: null, confident: false, description: '' };
+  }
+
+  // Trust the model's LABEL but verify it against the real menu — a
+  // hallucinated name would otherwise flow into the order path as if real.
+  const claimed = String(parsed.name || '').trim();
+  const found = claimed ? findMenuItemByName(claimed) : null;
+  return {
+    itemName: found ? found.item.name : null,
+    confident: Boolean(parsed.confident) && Boolean(found),
+    description: String(parsed.description || '').slice(0, 120),
+  };
 }
 
 async function interpretMessage(rawMsg) {
@@ -3078,10 +3201,96 @@ async function processWhatsAppMessage(message, res) {
           'Lo sentimos, tuve problemas con el mensaje de voz — ¿puedes escribirlo? 🙏'
         ));
       }
+    } else if (message.type === 'location') {
+      // A shared pin is far better than a typed address here — local
+      // addresses are often landmark-based ("house behind the blue gate"),
+      // which a driver can't navigate to. Handled inline rather than being
+      // turned into rawMsg, because a location isn't a phrase the rest of
+      // the pipeline could interpret.
+      const loc = message.location || {};
+      const lat = loc.latitude;
+      const lon = loc.longitude;
+      const sess = session;
+      const lang0 = sess.language || 'en';
+      if (typeof lat !== 'number' || typeof lon !== 'number') {
+        return sendReply(res, from, bilingual(
+          "That location didn't come through — could you try sharing it again, or type the address? 🙏",
+          'Esa ubicación no llegó bien — ¿puedes compartirla de nuevo o escribir la dirección? 🙏'
+        ));
+      }
+
+      // A Google Maps link is what actually helps the driver; the label (if
+      // WhatsApp supplied one) helps the customer recognise it.
+      const label = [loc.name, loc.address].filter(Boolean).join(', ');
+      const mapsLink = `https://maps.google.com/?q=${lat},${lon}`;
+      const addressText = `${label ? `${label}\n` : ''}📍 ${mapsLink}`;
+
+      if (sess.step === 'address') {
+        sess.address = addressText.slice(0, MAX_ADDRESS_LENGTH);
+        // A pin is precise, but a gate colour or house number still helps —
+        // same optional, one-tap-skippable step the typed path uses.
+        sess.step = 'deliveryNote';
+        saveCustomerProfile(from, { savedAddress: sess.address })
+          .catch(err => console.error(`Failed to save shared location for ${from}:`, err.message || err));
+        return sendReply(res, from, deliveryNoteMessage(lang0));
+      }
+
+      // Shared outside the address step — acknowledge and keep it, so a
+      // customer who pins their location early doesn't have to repeat it.
+      saveCustomerProfile(from, { savedAddress: addressText.slice(0, MAX_ADDRESS_LENGTH) })
+        .catch(err => console.error(`Failed to save shared location for ${from}:`, err.message || err));
+      return sendReply(res, from, bilingual(
+        `📍 Got your location, thanks! I've saved it for your delivery.`,
+        `📍 ¡Recibimos tu ubicación, gracias! La guardamos para tu entrega.`
+      ));
+    } else if (message.type === 'image') {
+      const mediaId = message.image && message.image.id;
+      const mimeType = (message.image && message.image.mime_type) || '';
+      const caption = (message.image && message.image.caption) || '';
+      try {
+        // At the delivery-note step a photo is the customer's HOUSE, not
+        // food — describe it for the driver instead of matching the menu.
+        if (session.step === 'deliveryNote') {
+          const desc = await describePhotoForDriver(mediaId, mimeType, caption);
+          const lang0 = session.language || 'en';
+          const tt = TXT[lang0];
+          session.deliveryNote = [caption, desc].filter(Boolean).join(' — ').slice(0, MAX_ADDRESS_LENGTH);
+          session.step = 'confirm';
+          return sendReply(res, from, [
+            session.deliveryNote ? tt.deliveryNoteSaved : null,
+            cartText(session.cart, lang0),
+            confirmButtonsMessage(tt.deliveryConfirm(session.address), lang0),
+          ].filter(Boolean));
+        }
+
+        const guess = await identifyItemFromPhoto(mediaId, mimeType, caption);
+        if (guess.confident && guess.itemName) {
+          // Feed the recognised NAME through the normal text pipeline, so
+          // photo ordering reuses all the existing matching, sold-out and
+          // cart logic instead of a parallel path.
+          rawMsg = caption ? `${guess.itemName} ${caption}` : guess.itemName;
+          console.log(`Photo from ${from} recognised as "${guess.itemName}"`);
+        } else {
+          const lang0 = session.language || 'en';
+          const seen = guess.description ? (lang0 === 'es' ? `Veo ${guess.description}. ` : `I can see ${guess.description}. `) : '';
+          return sendReply(res, from, [
+            lang0 === 'es'
+              ? `📷 ${seen}Pero no estoy seguro de cuál artículo del menú es. ¿Me dices el nombre o eliges del menú?`
+              : `📷 ${seen}But I'm not sure which menu item that is. Could you tell me the name, or pick from the menu?`,
+            ...categoryListMessages(lang0),
+          ]);
+        }
+      } catch (imgErr) {
+        console.error('Photo recognition failed:', imgErr);
+        return sendReply(res, from, bilingual(
+          "Sorry, I couldn't open that photo — could you tell me what you'd like instead? 🙏",
+          'Lo sentimos, no pude abrir esa foto — ¿me dices qué te gustaría? 🙏'
+        ));
+      }
     } else {
       return sendReply(res, from, bilingual(
-        'Sorry, I can only handle text and voice messages right now — please type instead. 🙏',
-        'Lo siento, solo puedo procesar mensajes de texto y voz por ahora — por favor escribe tu mensaje. 🙏'
+        'Sorry, I can only handle text, voice notes, photos and shared locations right now — please type instead. 🙏',
+        'Lo siento, por ahora solo puedo procesar texto, notas de voz, fotos y ubicaciones — por favor escribe tu mensaje. 🙏'
       ));
     }
 
@@ -3784,6 +3993,9 @@ async function processWhatsAppMessage(message, res) {
         const savedAddr = getSavedAddress(from);
         if (msg === 'use_saved_address' && savedAddr) {
           session.address = savedAddr;
+          // A returning customer's saved address has already been delivered
+          // to before, so skip straight to confirm rather than asking for
+          // landmarks they've effectively already given us.
           session.step = 'confirm';
           reply = [cartText(session.cart, lang), confirmButtonsMessage(t.deliveryConfirm(session.address), lang)];
           break;
@@ -3808,12 +4020,40 @@ async function processWhatsAppMessage(message, res) {
         // Manager sheet, uncapped it could be up to WhatsApp's own ~4096-
         // char message limit.
         session.address = rawMsg.trim().slice(0, MAX_ADDRESS_LENGTH);
-        session.step = 'confirm';
+        // Ask for landmarks BEFORE confirming — a first-time address is
+        // exactly when a driver is most likely to get lost. One tap skips it.
+        session.step = 'deliveryNote';
         // Fire-and-forget write-through — saved for next time regardless of
         // whether THIS order goes on to be confirmed or cancelled; it's a
         // convenience cache, not tied to any one order's outcome.
         saveCustomerProfile(from, { savedAddress: rawMsg }).catch(err => console.error(`Failed to save address for ${from}:`, err.message || err));
-        reply = [cartText(session.cart, lang), confirmButtonsMessage(t.deliveryConfirm(session.address), lang)];
+        reply = deliveryNoteMessage(lang);
+        break;
+      }
+
+      case 'deliveryNote': {
+        // Reached only for deliveries, right after a NEW address. Text,
+        // voice (already transcribed into rawMsg upstream) and photos (turned
+        // into a description upstream) all arrive here as plain text.
+        if (msg === 'skip' || msg === 'omitir' || msg === 'no' || msg === 'none' || msg === 'ninguno') {
+          session.deliveryNote = '';
+        } else if (msg === '0' || msg === 'atras' || msg === 'atrás' || msg === 'back') {
+          session.step = 'address';
+          reply = t.askAddress(SHOP_INFO.deliveryFee);
+          break;
+        } else if (message.type === 'interactive') {
+          // Stale tap on some older button — same guard as 'notes'/'address'.
+          reply = deliveryNoteMessage(lang);
+          break;
+        } else {
+          session.deliveryNote = rawMsg.trim().slice(0, MAX_ADDRESS_LENGTH);
+        }
+        session.step = 'confirm';
+        reply = [
+          session.deliveryNote ? t.deliveryNoteSaved : null,
+          cartText(session.cart, lang),
+          confirmButtonsMessage(t.deliveryConfirm(session.address), lang),
+        ].filter(Boolean);
         break;
       }
 

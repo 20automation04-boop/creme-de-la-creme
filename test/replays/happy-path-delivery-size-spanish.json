@@ -10,7 +10,8 @@
     { "in": "sin azucar", "expectStep": "item", "expectCartLength": 1, "expectCartTotal": 8, "expectReplyContains": "Añadido" },
     { "in": "listo", "expectStep": "mode" },
     { "in": "entrega", "expectStep": "address" },
-    { "in": "123 Calle Principal", "expectStep": "confirm" },
+    { "in": "123 Calle Principal", "expectStep": "deliveryNote" },
+    { "comment": "optional landmark step — a typed note reaches the driver", "in": "portón azul junto a la iglesia", "expectStep": "confirm" },
     { "in": "si", "expectStep": "menu", "expectReplyContains": "confirmada" }
   ]
 }
