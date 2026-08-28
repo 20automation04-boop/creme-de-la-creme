@@ -1,0 +1,22 @@
+{
+  "name": "checkout-upsell-is-offered-once-and-never-blocks-checkout",
+  "from": "19990000030",
+  "turns": [
+    { "in": "1", "expectStep": "menu" },
+    { "in": "1", "expectStep": "item" },
+    { "in": "1", "expectStep": "quantity" },
+    { "in": "2", "expectStep": "notes" },
+    { "buttonId": "none", "expectStep": "item", "expectCartLength": 1 },
+
+    { "comment": "checkout goes straight to mode as always — the offer rides alongside, it is not a step", "in": "done", "expectStep": "mode", "expectCartLength": 1 },
+
+    { "comment": "declining leaves the cart alone and keeps them at mode", "buttonId": "no_thanks", "expectStep": "mode", "expectCartLength": 1 },
+
+    { "comment": "accepting adds exactly one and stays at mode", "buttonId": "add1:2:1", "expectStep": "mode", "expectCartLength": 2 },
+
+    { "comment": "a sold-out suggestion must not be addable", "markSoldOut": ["2.2"], "buttonId": "add1:2:2", "expectStep": "mode", "expectCartLength": 2 },
+    { "clearSoldOut": true },
+
+    { "comment": "checkout still completes normally", "buttonId": "pickup", "expectStep": "confirm" }
+  ]
+}

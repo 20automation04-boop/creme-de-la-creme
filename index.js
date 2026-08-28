@@ -1762,6 +1762,7 @@ function newSession() {
     escalationStage: 0, // 0=none, 1=softened tone shown, 2=shortcut offered, 3=escalated to a human — one-way ratchet, resets with the session
     transcript: [], // { role: 'customer'|'bot', text } — capped, attached on human handoff
     duplicateWarningAcked: false, // see the duplicate-order soft-warning at 'confirm'
+    upsellShown: false, // the checkout add-on suggestion fires at most once per session
   };
 }
 
@@ -3286,6 +3287,57 @@ app.post('/whatsapp', async (req, res) => {
 // only real difference between those two call sites was which view to fall
 // back to when the cart is empty. Returns the reply value for that branch;
 // mutates session.step/funnelCounters same as the original inline code did.
+// ---- CHECKOUT UPSELL ----
+// One suggestion, once per session, at the moment they say "done". Picks a
+// genuine best-seller (from real order history) that is NOT already in the
+// cart and comes from a DIFFERENT category — suggesting a second coffee to
+// someone buying coffee is noise; suggesting a hot dog to someone buying
+// three drinks is a real add-on.
+//
+// Deliberately restrained: one item, one tap to decline, and never shown
+// twice in a session. An upsell that nags costs more in abandoned carts than
+// it earns.
+async function pickUpsell(session) {
+  const inCart = new Set(session.cart.map(i => `${i.categoryId}.${i.itemIndex}`));
+  const cartCategories = new Set(session.cart.map(i => String(i.categoryId)));
+
+  let ranked = [];
+  try {
+    const { hits } = await findRecommendedItems(12);
+    ranked = hits;
+  } catch (err) {
+    // Never let a stats hiccup block checkout — no suggestion is fine.
+    console.error('Upsell lookup failed, skipping suggestion:', err.message || err);
+    return null;
+  }
+
+  const candidates = ranked.filter(h =>
+    !inCart.has(`${h.cat.id}.${h.itemIndex}`) &&
+    !isItemSoldOut(h.cat.id, h.itemIndex));
+
+  // Prefer a different category; fall back to any unrelated item.
+  return candidates.find(h => !cartCategories.has(String(h.cat.id))) || candidates[0] || null;
+}
+
+function upsellMessage(hit, lang) {
+  const price = hit.item.sizes ? hit.item.sizes[0].price : hit.item.price;
+  const body = lang === 'es'
+    ? `🤔 ¿Le añadimos *${hit.item.name}* por $${price.toFixed(2)}?`
+    : `🤔 Add *${hit.item.name}* for $${price.toFixed(2)}?`;
+  return {
+    buttons: {
+      body,
+      buttons: [
+        // add1: adds one and goes straight to checkout — distinct from
+        // item:, which would send them into the quantity step instead.
+        { id: `add1:${hit.cat.id}:${hit.itemIndex}`, title: lang === 'es' ? 'Sí, añadir ➕' : 'Yes, add it ➕' },
+        { id: 'no_thanks', title: lang === 'es' ? 'No, gracias' : 'No thanks' },
+      ],
+    },
+    fallback: body,
+  };
+}
+
 function tryCheckout(session, lang, emptyCartFallbackViews) {
   const t = TXT[lang];
   if (session.cart.length === 0) {
@@ -3299,6 +3351,29 @@ function tryCheckout(session, lang, emptyCartFallbackViews) {
   session.step = 'mode';
   funnelCounters.checkoutStarted++;
   return [cartText(session.cart, lang), modeButtonsMessage(SHOP_INFO.deliveryFee, lang)];
+}
+
+// Wraps tryCheckout with the one-time upsell.
+//
+// The suggestion is APPENDED to the normal checkout reply rather than being
+// its own step. A first attempt made it a step — "add this?" then pickup/
+// delivery — and it broke a dozen existing checkout fixtures, which was the
+// tell: it had inserted a mandatory extra tap into every single order to
+// serve the shop rather than the customer. Now the mode buttons arrive as
+// always and the offer simply sits alongside them; ignoring it costs
+// nothing, and the 'mode' step accepts the add1: id if they want it.
+//
+// Any failure falls through to the plain checkout — an upsell must never be
+// able to block an order.
+async function tryCheckoutWithUpsell(session, lang, emptyCartFallbackViews) {
+  const base = tryCheckout(session, lang, emptyCartFallbackViews);
+  if (session.step !== 'mode' || session.upsellShown) return base;
+
+  session.upsellShown = true; // once per session, whatever they do
+  const hit = await pickUpsell(session);
+  if (!hit) return base;
+
+  return [...(Array.isArray(base) ? base : [base]), upsellMessage(hit, lang)];
 }
 
 // Table-driven owner commands (see OWNER_NUMBERS above for the full list
@@ -3853,7 +3928,7 @@ async function processWhatsAppMessage(message, res) {
         } else if (msg === 'repeat' || msg === 'repetir') {
           reply = buildRepeatReply(from, session, lang);
         } else if (msg === 'done' || msg === 'listo' || msg === 'checkout') {
-          reply = tryCheckout(session, lang, categoryListMessages(lang));
+          reply = await tryCheckoutWithUpsell(session, lang, categoryListMessages(lang));
         } else {
           const faqKey = matchFAQKeyword(msg);
           if (faqKey) {
@@ -3934,7 +4009,7 @@ async function processWhatsAppMessage(message, res) {
         }
 
         if (msg === 'done' || msg === 'listo' || msg === 'checkout') {
-          reply = tryCheckout(session, lang, [categoryItemsListMessage(cat, lang)]);
+          reply = await tryCheckoutWithUpsell(session, lang, [categoryItemsListMessage(cat, lang)]);
           break;
         }
 
@@ -4179,6 +4254,31 @@ async function processWhatsAppMessage(message, res) {
       }
 
       case 'mode': {
+        // Upsell accepted: add one and re-show the mode buttons, so they're
+        // exactly where they were, one item richer. Declining ('no_thanks')
+        // falls through to the normal invalid-input path below, which
+        // re-prompts for pickup/delivery — no dead end either way.
+        const addOne = msg.match(/^add1:(\d+):(\d+)$/);
+        if (addOne) {
+          const upCat = MENU.find(c => c.id === addOne[1]);
+          const upIndex = parseInt(addOne[2], 10);
+          const upItem = upCat && upCat.items[upIndex - 1];
+          if (upItem && !isItemSoldOut(upCat.id, upIndex)) {
+            const upName = upItem.sizes ? `${upItem.name} (${upItem.sizes[0].label})` : upItem.name;
+            const upPrice = upItem.sizes ? upItem.sizes[0].price : upItem.price;
+            reply = addToCart(session.cart, upName, upPrice, 1, '', upCat.id, upIndex)
+              ? [t.added(`${upName} x1 - $${upPrice.toFixed(2)}`, cartTotal(session.cart).toFixed(2)),
+                 modeButtonsMessage(SHOP_INFO.deliveryFee, lang)]
+              : [t.cartFull, modeButtonsMessage(SHOP_INFO.deliveryFee, lang)];
+          } else {
+            reply = modeButtonsMessage(SHOP_INFO.deliveryFee, lang);
+          }
+          break;
+        }
+        if (msg === 'no_thanks') {
+          reply = modeButtonsMessage(SHOP_INFO.deliveryFee, lang);
+          break;
+        }
         if (msg === '0' || msg === 'atras' || msg === 'atrás' || msg === 'back') {
           session.step = 'menu';
           reply = [cartText(session.cart, lang), ...categoryListMessages(lang)];
