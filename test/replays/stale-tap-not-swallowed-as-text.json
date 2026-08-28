@@ -43,6 +43,15 @@
     },
     {
       "in": "123 Real Street",
+      "expectStep": "deliveryNote"
+    },
+    {
+      "comment": "the landmark step must reject stale taps too, not store an id as the note",
+      "buttonId": "done",
+      "expectStep": "deliveryNote"
+    },
+    {
+      "buttonId": "skip",
       "expectStep": "confirm"
     }
   ]

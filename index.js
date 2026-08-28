@@ -183,6 +183,19 @@ async function sendReply(res, to, textOrMessages) {
   }
 }
 
+// Public base URL for the dashboards, used to put a tap-through link in
+// staff notifications. Railway injects RAILWAY_PUBLIC_DOMAIN automatically,
+// so this normally needs no configuration; PUBLIC_BASE_URL overrides it if
+// the bot ever moves behind a custom domain. Empty = links are simply
+// omitted from notifications rather than sending a broken URL.
+const PUBLIC_BASE_URL = (process.env.PUBLIC_BASE_URL
+  || (process.env.RAILWAY_PUBLIC_DOMAIN ? `https://${process.env.RAILWAY_PUBLIC_DOMAIN}` : '')
+).replace(/\/+$/, '');
+
+function dashboardLink(path) {
+  return PUBLIC_BASE_URL ? `${PUBLIC_BASE_URL}${path}` : '';
+}
+
 // ---- DELIVERY DRIVER NOTIFICATION ----
 // EDIT THIS: add real driver WhatsApp number(s) as bare digits with country
 // code, NO '+' and NO 'whatsapp:' prefix (e.g. '5016256563').
@@ -342,9 +355,42 @@ async function notifyDriver(orderNumber, session, from) {
     ? (session.language === 'es' ? `\n\n⚠️ *Nota del cliente:* ${note}` : `\n\n⚠️ *Customer note:* ${note}`)
     : '';
 
+  // Landmark/instructions the customer gave at the deliveryNote step —
+  // typed, spoken, or described from a photo of their gate/house. Placed
+  // right under the address, which is where a driver is actually looking.
+  const findMeTag = session.deliveryNote
+    ? (session.language === 'es' ? `\n🏠 *Cómo encontrarlo:* ${session.deliveryNote}` : `\n🏠 *Finding it:* ${session.deliveryNote}`)
+    : '';
+
+  // This message has to work COMPLETELY on its own — a driver should never
+  // need the dashboard to do the job, it's just a convenience.
+  //
+  // A shared location already carries a maps URL inside session.address; a
+  // TYPED address carries nothing tappable, which left the driver copying
+  // text into Maps by hand. Add a geocoded link in that case only, so a pin
+  // is never overridden by a worse guess and the link isn't duplicated.
+  const hasLink = /https?:\/\//.test(session.address || '');
+  const mapsUrl = hasLink
+    ? ''
+    : `https://maps.google.com/?q=${encodeURIComponent(String(session.address || '').replace(/\s+/g, ' ').trim())}`;
+  const mapTag = mapsUrl
+    ? (session.language === 'es' ? `\n🗺️ Navegar: ${mapsUrl}` : `\n🗺️ Navigate: ${mapsUrl}`)
+    : '';
+
+  const placed = new Date().toLocaleString('en-US', {
+    timeZone: SHOP_HOURS.timezone, dateStyle: 'short', timeStyle: 'short',
+  });
+  const timeTag = session.language === 'es' ? `\n🕐 *Hora:* ${placed}` : `\n🕐 *Placed:* ${placed}`;
+
+  // Appended last, after everything the driver actually needs.
+  const board = dashboardLink('/driver');
+  const boardTag = board
+    ? (session.language === 'es' ? `\n\n🗺️ Tablero (opcional): ${board}` : `\n\n🗺️ Driver board (optional): ${board}`)
+    : '';
+
   const message = preorderTag + (session.language === 'es'
-    ? `🏍️ *NUEVA ORDEN DE ENTREGA #${orderNumber}*\n${divider}\n🛍️ *Artículos:*\n${itemLines}\n${divider}\n💵 *Total a cobrar: $${total} BZD*\n\n📍 *Entregar a:*\n${session.address}\n📞 *Teléfono del cliente:* +${from}${noteTag}`
-    : `🏍️ *NEW DELIVERY ORDER #${orderNumber}*\n${divider}\n🛍️ *Items:*\n${itemLines}\n${divider}\n💵 *Total to collect: $${total} BZD*\n\n📍 *Deliver to:*\n${session.address}\n📞 *Customer phone:* +${from}${noteTag}`);
+    ? `🏍️ *NUEVA ORDEN DE ENTREGA #${orderNumber}*${timeTag}\n${divider}\n🛍️ *Artículos:*\n${itemLines}\n${divider}\n💵 *Total a cobrar: $${total} BZD* (efectivo)\n\n📍 *Entregar a:*\n${session.address}${findMeTag}${mapTag}\n📞 *Teléfono del cliente:* +${from}${noteTag}${boardTag}`
+    : `🏍️ *NEW DELIVERY ORDER #${orderNumber}*${timeTag}\n${divider}\n🛍️ *Items:*\n${itemLines}\n${divider}\n💵 *Total to collect: $${total} BZD* (cash)\n\n📍 *Deliver to:*\n${session.address}${findMeTag}${mapTag}\n📞 *Customer phone:* +${from}${noteTag}${boardTag}`);
 
   await notifyAllDrivers(message);
 }
@@ -364,7 +410,11 @@ async function notifyOwnerOfPickupOrder(orderNumber, session, from) {
   const note = getCustomerNote(from);
   const noteTag = note ? `\n\n⚠️ *Customer note:* ${note}` : '';
 
-  const message = preorderTag + `📦 *NEW PICKUP ORDER #${orderNumber}*\n${divider}\n🛍️ *Items:*\n${itemLines}\n${divider}\n💵 *Total: $${total} BZD*\n\n📞 *Customer phone:* +${from}${noteTag}`;
+  // Pickup orders are worked from the kitchen board, so that's the link here.
+  const board = dashboardLink('/kitchen');
+  const boardTag = board ? `\n\n👨‍🍳 Open kitchen board: ${board}` : '';
+
+  const message = preorderTag + `📦 *NEW PICKUP ORDER #${orderNumber}*\n${divider}\n🛍️ *Items:*\n${itemLines}\n${divider}\n💵 *Total: $${total} BZD*\n\n📞 *Customer phone:* +${from}${noteTag}${boardTag}`;
 
   await notifyOwners(message);
 }
@@ -381,9 +431,20 @@ const sheets = google.sheets({ version: 'v4', auth: sheetsAuth });
 // silent no-op. This means replay tests exercise the FSM/state-machine
 // layer only, not real Sheets integration (that's covered by this project's
 // existing live-smoke-test practice instead).
+// Tests can seed rows per range (e.g. dryRunSheetRows['Manager!A2:H'] = [...])
+// so the dashboard endpoints' real parsing — money formatting, splitting the
+// address and landmark back out of the mode cell, filtering by status — is
+// exercised against known data instead of only ever seeing an empty sheet.
+// Empty by default, so anything that doesn't seed still reads nothing.
+const dryRunSheetRows = {};
+const dryRunSheetWrites = [];
+
 if (BOT_DRY_RUN) {
-  sheets.spreadsheets.values.get = async () => ({ data: { values: [] } });
-  sheets.spreadsheets.values.update = async () => ({ data: {} });
+  sheets.spreadsheets.values.get = async ({ range }) => ({ data: { values: dryRunSheetRows[range] || [] } });
+  sheets.spreadsheets.values.update = async ({ range, requestBody }) => {
+    dryRunSheetWrites.push({ range, values: requestBody && requestBody.values });
+    return { data: {} };
+  };
 }
 
 // ---- OWNER COMMANDS ----
@@ -470,7 +531,11 @@ async function logOrderToSheets(orderNumber, session, from) {
   }).join('; ');
 
   const total = session.cart.reduce((sum, i) => sum + i.price * i.qty, 0).toFixed(2);
-  const modeText = (session.mode === 'delivery' ? `Delivery - ${session.address}` : 'Pickup') + (session.isPreorder ? ' [PRE-ORDER]' : '');
+  // The delivery note rides along in the mode cell so staff reading the
+  // sheet (or the kitchen dashboard, which renders this same field) see the
+  // landmark info without needing a new column.
+  const findMe = session.mode === 'delivery' && session.deliveryNote ? ` (${session.deliveryNote})` : '';
+  const modeText = (session.mode === 'delivery' ? `Delivery - ${session.address}${findMe}` : 'Pickup') + (session.isPreorder ? ' [PRE-ORDER]' : '');
   // `from` is bare digits (Meta/Chakra format, no '+'). Store it human-readable
   // with a '+' — the leading apostrophe forces Sheets to keep it as text
   // instead of trying to evaluate "+50161234567" as a formula.
@@ -548,6 +613,17 @@ function sheetSafe(value) {
 
 // Strips a Sheets phone cell (e.g. "'+50161234567") down to bare digits for
 // comparison — the one normalization every phone-matching/lookup site needs.
+// Sheet cells hold whatever was written into them — "14.5", "14.50", "$14.50",
+// or a number Sheets has helpfully stripped a trailing zero from. Staff
+// reading a total off a screen should always see two decimals, so every
+// dashboard formats through here rather than echoing the raw cell.
+// Returns null for a genuinely unreadable value so callers can decide what
+// to show, instead of printing "NaN" at someone.
+function formatMoney(cell) {
+  const n = parseFloat(String(cell == null ? '' : cell).replace(/[^0-9.]/g, ''));
+  return Number.isFinite(n) ? n.toFixed(2) : null;
+}
+
 function normalizePhoneDigits(cell) {
   return (cell || '').replace(/\D/g, '');
 }
@@ -738,8 +814,39 @@ function isValidSenderId(from) {
 // runaway cost (it's a fixed-window counter, so a sender can burst up to
 // ~2x max right at a window boundary — acceptable for a cost ceiling, not
 // a precise guarantee). Bump these if this shop ever gets genuinely busy.
-const RATE_LIMIT_PER_SENDER = { max: 20, windowMs: 60 * 1000 };
-const RATE_LIMIT_GLOBAL = { max: 120, windowMs: 60 * 1000 };
+// Raised from 20/min after a real customer was silently cut off mid-order.
+// Ordering ONE item is already ~10 messages (language, menu, category, item,
+// quantity, notes, done, mode, address, confirm) — someone tapping quickly
+// through a three-item order blew past 20 in well under a minute, and every
+// message past that was dropped with no reply at all. The limit exists to
+// cap abuse and AI spend, not to police normal ordering speed.
+const RATE_LIMIT_PER_SENDER = { max: 60, windowMs: 60 * 1000 };
+const RATE_LIMIT_GLOBAL = { max: 300, windowMs: 60 * 1000 };
+
+// Muscle-memory double-taps: the same button pressed twice in quick
+// succession arrives as two DIFFERENT message ids, so id-based dedup can't
+// see it. Processing both is at best a duplicated prompt and at worst a
+// duplicated action, so an identical payload from the same sender inside
+// this window is ignored.
+// At most one "slow down" notice per sender per minute, so the notice can't
+// itself become the flood.
+const RATE_LIMIT_NOTICE = { max: 1, windowMs: 60 * 1000 };
+
+const TAP_DEBOUNCE_MS = 1200;
+const lastTapBydSender = new Map();
+
+function isRepeatTap(from, payload) {
+  if (!payload) return false;
+  const now = Date.now();
+  const prev = lastTapBydSender.get(from);
+  lastTapBydSender.set(from, { payload, at: now });
+  if (lastTapBydSender.size > 2000) {
+    for (const [k, v] of lastTapBydSender) {
+      if (now - v.at > 60 * 1000) lastTapBydSender.delete(k);
+    }
+  }
+  return Boolean(prev && prev.payload === payload && now - prev.at < TAP_DEBOUNCE_MS);
+}
 const rateBuckets = new Map(); // key -> { count, windowStart }
 
 function isRateLimited(key, { max, windowMs }) {
@@ -1039,6 +1146,15 @@ function applyMenuSheetRows(rows) {
 function findMenuItemByName(query) {
   const q = query.trim().toLowerCase();
   if (!q) return null;
+  // Exact name wins over substring. Without this pass, "Mango" resolves to
+  // "Mango/Pine" — whichever happens to sit earlier in the category — so
+  // asking for one item silently gets you a different one. Substring
+  // matching is still the fallback, since owner commands like
+  // `soldout vanilla` rely on partial names.
+  for (const cat of MENU) {
+    const idx = cat.items.findIndex(item => item.name.toLowerCase() === q);
+    if (idx >= 0) return { categoryId: cat.id, itemIndex: idx + 1, item: cat.items[idx] };
+  }
   for (const cat of MENU) {
     const idx = cat.items.findIndex(item => item.name.toLowerCase().includes(q));
     if (idx >= 0) return { categoryId: cat.id, itemIndex: idx + 1, item: cat.items[idx] };
@@ -1053,6 +1169,64 @@ function findMenuItemByName(query) {
 // in-memory for this process's lifetime even if the write-through fails,
 // same "never let Sheets flakiness break the live path" principle as
 // everywhere else in this file.
+// Renames / re-prices an item from the manager dashboard. Same contract as
+// setItemAvailability: update memory immediately so the change is live for
+// the very next customer, and write through to the Availability sheet so it
+// survives refreshMenuFromSheet's 2-minute cycle (which reads the sheet back
+// over memory). Editing the sheet by hand still works exactly as before —
+// this is a second door onto the same room, not a replacement.
+async function updateMenuItemFields(categoryId, itemIndex, { name, price, largePrice }) {
+  const cat = MENU.find(c => c.id === categoryId);
+  const item = cat && cat.items[itemIndex - 1];
+  if (!item) throw new Error('unknown item');
+
+  if (name) item.name = name;
+  if (Number.isFinite(price) && price > 0) {
+    if (item.sizes) item.sizes[0].price = price;
+    else item.price = price;
+  }
+  if (Number.isFinite(largePrice) && largePrice > 0 && item.sizes && item.sizes[1]) {
+    item.sizes[1].price = largePrice;
+  }
+
+  if (!process.env.GOOGLE_SHEETS_ID) return;
+  const key = itemKey(categoryId, itemIndex);
+  await withSessionLock('__sheets_availability_write__', async () => {
+    const res = await withTimeout(sheets.spreadsheets.values.get({
+      spreadsheetId: process.env.GOOGLE_SHEETS_ID,
+      range: 'Availability!A2:A',
+    }), 8000);
+    const rows = res.data.values || [];
+    const rowIndex = rows.findIndex(r => (r[0] || '').trim() === key);
+    if (rowIndex < 0) throw new Error('This item has no row in the Availability sheet yet.');
+    const rowNum = rowIndex + 2;
+    if (name) {
+      await withTimeout(sheets.spreadsheets.values.update({
+        spreadsheetId: process.env.GOOGLE_SHEETS_ID,
+        range: `Availability!C${rowNum}`,
+        valueInputOption: 'USER_ENTERED',
+        requestBody: { values: [[name]] },
+      }), 6000);
+    }
+    if (Number.isFinite(price) && price > 0) {
+      await withTimeout(sheets.spreadsheets.values.update({
+        spreadsheetId: process.env.GOOGLE_SHEETS_ID,
+        range: `Availability!E${rowNum}`,
+        valueInputOption: 'USER_ENTERED',
+        requestBody: { values: [[price]] },
+      }), 6000);
+    }
+    if (Number.isFinite(largePrice) && largePrice > 0) {
+      await withTimeout(sheets.spreadsheets.values.update({
+        spreadsheetId: process.env.GOOGLE_SHEETS_ID,
+        range: `Availability!F${rowNum}`,
+        valueInputOption: 'USER_ENTERED',
+        requestBody: { values: [[largePrice]] },
+      }), 6000);
+    }
+  });
+}
+
 async function setItemAvailability(categoryId, itemIndex, available) {
   const item = itemAt(categoryId, itemIndex);
   if (!item) return;
@@ -1453,13 +1627,17 @@ Need help? Type *help* anytime.`,
     askNotes: 'Any special requests for this item? (extra ice, no onions, etc.) Type *none* if not.',
     noneButtonTitle: 'None ✅',
     helpButtonTitle: 'How to order 💡',
+    quickCommands: 'You can also just type:\n*menu* — see the menu\n*cart* — see your order\n*done* — checkout\n*repeat* — reorder your last order\n*agent* — talk to a person',
+    askDeliveryNote: "🏠 Anything that helps our driver find you? A landmark, gate colour, house number — you can type it, send a voice note 🎙️, or even a photo 📷 of the place.\n\nTap *Skip* if it's easy to find.",
+    skipButtonTitle: 'Skip ⏭️',
+    deliveryNoteSaved: "Got it — I'll pass that to the driver. 🏍️",
     cartEmptyCheckout: "Cart's empty — pick something first!",
     cartFull: `Your cart's got a LOT going on already (${MAX_CART_LINES} different items!) — let's get this order checked out before adding more. Type *done* whenever you're ready!`,
     askMode: (fee) => `Pickup 📦 or delivery 🏍️? (Delivery is $${fee} BZD)`,
     upsellLine: (name, price) => `*${name}* goes well with that — $${price} if you'd like one. No worries either way 😊`,
     upsellAdded: (name) => `Added *${name}* ✅`,
     pickupConfirm: '📦 Pickup order. Confirm? (yes/no)',
-    askAddress: (fee) => `🏍️ What's the delivery address 📍 and a contact number?\n(Delivery fee: $${fee} BZD)`,
+    askAddress: (fee) => `🏍️ What's the delivery address 📍 and a contact number?\n\n💡 Tip: you can share your location instead — tap 📎 → Location. It helps our driver find you faster!\n(Delivery fee: $${fee} BZD)`,
     deliveryConfirm: (addr) => `🏍️ Delivery to: ${addr}\n\nConfirm order? (yes/no)`,
     askModeInvalid: 'Pickup or delivery — which one?',
     orderConfirmed: (num, phone) => `🎉 Order #${num} confirmed! Thank you!\n\nWe'll be in touch shortly.\n\n📞 Need anything else? Call us at ${phone}.`,
@@ -1557,13 +1735,17 @@ Need help? Type *help* anytime.`,
     askNotes: '¿Alguna petición especial para este artículo? (extra hielo, sin cebolla, etc.) Escribe *ninguno* si no.',
     noneButtonTitle: 'Ninguna ✅',
     helpButtonTitle: 'Cómo ordenar 💡',
+    quickCommands: 'También puedes escribir:\n*menú* — ver el menú\n*carrito* — ver tu orden\n*listo* — finalizar\n*repetir* — repetir tu última orden\n*agente* — hablar con una persona',
+    askDeliveryNote: '🏠 ¿Algo que ayude al repartidor a encontrarte? Un punto de referencia, color del portón, número de casa — puedes escribirlo, mandar una nota de voz 🎙️, o hasta una foto 📷 del lugar.\n\nToca *Omitir* si es fácil de encontrar.',
+    skipButtonTitle: 'Omitir ⏭️',
+    deliveryNoteSaved: 'Listo — se lo pasamos al repartidor. 🏍️',
     cartEmptyCheckout: '¡Carrito vacío, elige algo primero!',
     cartFull: `Tu carrito ya tiene bastante (¡${MAX_CART_LINES} artículos distintos!) — finalicemos esta orden antes de añadir más. ¡Escribe *listo* cuando estés listo!`,
     askMode: (fee) => `¿Recoger 📦 o entrega 🏍️? (La entrega cuesta $${fee} BZD)`,
     upsellLine: (name, price) => `*${name}* combina bien con eso — $${price} si quieres uno. Sin problema si no 😊`,
     upsellAdded: (name) => `Añadí *${name}* ✅`,
     pickupConfirm: '📦 Orden para recoger. ¿Confirmas? (si/no)',
-    askAddress: (fee) => `🏍️ ¿Cuál es la dirección de entrega 📍 y un número de contacto?\n(Costo de entrega: $${fee} BZD)`,
+    askAddress: (fee) => `🏍️ ¿Cuál es la dirección de entrega 📍 y un número de contacto?\n\n💡 Tip: puedes compartir tu ubicación — toca 📎 → Ubicación. ¡Así el repartidor te encuentra más rápido!\n(Costo de entrega: $${fee} BZD)`,
     deliveryConfirm: (addr) => `🏍️ Entrega a: ${addr}\n\n¿Confirmas la orden? (si/no)`,
     askModeInvalid: '¿Recoger o entrega — cuál prefieres?',
     orderConfirmed: (num, phone) => `🎉 ¡Orden #${num} confirmada! ¡Gracias!\n\nNos pondremos en contacto pronto.\n\n📞 ¿Necesitas algo más? Llámanos al ${phone}.`,
@@ -1649,6 +1831,7 @@ function newSession() {
     pendingItemIndex: null,
     mode: null,
     address: null,
+    deliveryNote: '', // landmark/instructions for the driver — optional, delivery orders only
     lastMessageAt: Date.now(),
     nudgeStage: 0, // 0 = none sent, 1 = ~3min nudge sent, 2 = ~10min hold sent — see sweepIdleSessions()
     pendingResume: false, // true right after a saved cart is offered back to the customer
@@ -2249,6 +2432,24 @@ function coreMessage(rawMsg) {
     .trim();
 }
 
+// LAST tier, tried only when no phrase pattern above matched: does the
+// message simply CONTAIN a command word? "cambia algo en mi carrito" isn't a
+// phrasing anyone anticipated, but the word "carrito" says plainly enough
+// what they want to look at.
+//
+// Restricted on purpose to commands that are read-only or a handoff. A fuzzy
+// keyword hit must never be able to check out, cancel an order, or refill a
+// cart — the cost of guessing wrong there is real money, whereas guessing
+// wrong here shows someone their cart when they wanted something else.
+// 'done', 'cancel' and 'repeat' are therefore deliberately absent.
+const KEYWORD_HINTS = [
+  { cmd: 'cart', re: /\b(cart|basket|carrito|canasta)\b/i },
+  { cmd: 'status', re: /\b(status|estado)\b/i },
+  { cmd: 'agent', re: /\b(agent|human|agente|humano|persona)\b/i },
+  { cmd: 'help', re: /\b(help|ayuda|instructions|instrucciones)\b/i },
+  { cmd: 'menu', re: /\b(menu|men[uú])\b/i },
+];
+
 function resolveNaturalCommand(rawMsg) {
   // The bare keywords and button ids are matched by the existing handlers
   // before this ever runs — this is purely the "customer never learned the
@@ -2258,6 +2459,9 @@ function resolveNaturalCommand(rawMsg) {
   for (const { cmd, re, whole } of NATURAL_COMMANDS) {
     if (re && re.test(rawMsg)) return cmd;
     if (whole && whole.test(core)) return cmd;
+  }
+  for (const { cmd, re } of KEYWORD_HINTS) {
+    if (re.test(rawMsg)) return cmd;
   }
   return null;
 }
@@ -2558,7 +2762,11 @@ function confirmButtonsMessage(bodyText, lang) {
 // (see stopGuessing). One bad parse shouldn't route a customer to a human.
 function stuckHelpMessage(lang) {
   const t = TXT[lang];
-  const body = `${t.notUnderstood}\n\n${t.humanHelp(SHOP_INFO.phone)}`;
+  // Show the actual commands inline, not just a pointer to *help* — if we've
+  // got this far the customer has already typed something we couldn't read,
+  // so telling them to type another word they don't know is a dead end.
+  // Kept to the handful that matter; the full glossary is behind the button.
+  const body = `${t.notUnderstood}\n\n${t.quickCommands}\n\n${t.humanHelp(SHOP_INFO.phone)}`;
   return {
     buttons: {
       body,
@@ -2588,6 +2796,22 @@ function notesButtonsMessage(lang) {
 // 'item' steps — see the case blocks below). Browsing other categories still
 // has its own buttons via the categoryList/categoryItems message that's
 // always sent right after this one; this only adds the missing checkout tap.
+// Optional landmark/instructions step for deliveries only. One tap to skip,
+// so it costs a customer who doesn't need it a single button press — the
+// address itself is already captured by this point, so nothing here can
+// block checkout.
+function deliveryNoteMessage(lang) {
+  const t = TXT[lang];
+  const body = t.askDeliveryNote;
+  return {
+    buttons: {
+      body,
+      buttons: [{ id: 'skip', title: t.skipButtonTitle }],
+    },
+    fallback: body,
+  };
+}
+
 function confirmNudgeMessage(lang) {
   const t = TXT[lang];
   const body = t.askConfirmNudge;
@@ -2796,23 +3020,30 @@ function buildMenuListingForAI() {
 // then fed through the EXACT SAME pipeline a typed message goes through
 // (attemptFreeOrder, interpretMessage, etc.) — no separate order-matching
 // logic needed for voice.
-async function transcribeVoiceNote(mediaId, mimeType) {
+// Shared by voice notes and photos — same endpoint, same auth, only the
+// media id differs.
+async function downloadWhatsAppMedia(mediaId, mimeType, label) {
   const mediaUrl = `https://api.chakrahq.com/v1/whatsapp/${CHAKRA_API_VERSION}/media/${mediaId}/show`;
-  const audioRes = await withTimeout(fetch(mediaUrl, {
+  const res = await withTimeout(fetch(mediaUrl, {
     headers: { Authorization: `Bearer ${CHAKRA_API_KEY}` },
   }), 10000);
-  if (!audioRes.ok) throw new Error(`Failed to download voice note (HTTP ${audioRes.status})`);
-  const audioBuffer = Buffer.from(await audioRes.arrayBuffer());
-  const base64Audio = audioBuffer.toString('base64');
-  // WhatsApp sometimes appends codec params, e.g. "audio/ogg; codecs=opus" —
-  // Gemini expects a clean MIME type.
-  const cleanMimeType = (mimeType || '').split(';')[0].trim();
+  if (!res.ok) throw new Error(`Failed to download ${label} (HTTP ${res.status})`);
+  const buffer = Buffer.from(await res.arrayBuffer());
+  return {
+    data: buffer.toString('base64'),
+    // WhatsApp sometimes appends codec params, e.g. "audio/ogg; codecs=opus" —
+    // Gemini expects a clean MIME type.
+    mimeType: (mimeType || '').split(';')[0].trim(),
+  };
+}
 
+async function transcribeVoiceNote(mediaId, mimeType) {
+  const { data, mimeType: clean } = await downloadWhatsAppMedia(mediaId, mimeType, 'voice note');
   const result = await withTimeout(genAI.models.generateContent({
     model: 'gemini-3.1-flash-lite',
     contents: [
       { text: 'Transcribe this voice message exactly as spoken, in whatever language it is (English or Spanish). Respond with ONLY the transcription text — no commentary, no quotation marks, no translation.' },
-      { inlineData: { mimeType: cleanMimeType, data: base64Audio } },
+      { inlineData: { mimeType: clean, data } },
     ],
   }), 25000);
 
@@ -2823,6 +3054,114 @@ async function transcribeVoiceNote(mediaId, mimeType) {
 // sentence or two; anything longer is the model having been talked into
 // something.
 const AI_ANSWER_MAX_CHARS = 500;
+
+// A photo sent at the delivery-note step is the customer's HOUSE or a
+// landmark, not food — so it's described for the driver rather than matched
+// against the menu. The description is what actually reaches the driver;
+// the photo itself isn't re-sent, since inbound media ids belong to the
+// customer's upload and aren't re-sendable from our account.
+async function describePhotoForDriver(mediaId, mimeType, caption) {
+  const { data, mimeType: clean } = await downloadWhatsAppMedia(mediaId, mimeType, 'photo');
+  const prompt = `A food-delivery customer sent this photo to help the driver find their address${caption ? ` with the caption: "${caption}"` : ''}.
+
+Describe ONLY what would help a driver recognise the place: building colour, gate, door, signage, house number, notable landmarks nearby.
+
+Rules:
+- Maximum 25 words, one sentence, plain text.
+- Do NOT describe people, or guess an address/street name that isn't visibly written.
+- If the photo shows nothing useful for finding a place, reply exactly: NONE`;
+
+  const result = await withTimeout(genAI.models.generateContent({
+    model: 'gemini-3.1-flash-lite',
+    contents: [{ text: prompt }, { inlineData: { mimeType: clean, data } }],
+    config: { temperature: 0 },
+  }), 25000);
+
+  const text = (result.text || '').trim();
+  if (!text || /^none$/i.test(text)) return '';
+  return text.slice(0, 200);
+}
+
+// ---- PHOTO RECOGNITION ----
+// A customer photographs a drink/dish (a friend's order, a printed menu, a
+// social post) and asks "this one".
+//
+// Three outcomes, not two. Only a clear, unambiguous match adds an item
+// straight to the cart — putting the wrong food in a real order is the one
+// genuinely costly mistake here. But refusing to help whenever certainty is
+// short of total is its own failure: if the photo is plainly a frozen mango
+// drink and we sell three, the useful move is to ASK which, not to dump the
+// whole menu and make the customer start over.
+//
+//   high   + exactly one candidate -> order it
+//   medium (or several candidates) -> show those candidates to tap
+//   low    / nothing recognisable  -> say what we see, show the menu
+//
+// Names are always verified against the real menu, so a hallucinated item
+// can never reach the order path regardless of how confident the model claims
+// to be.
+async function identifyItemFromPhoto(mediaId, mimeType, caption) {
+  const { data, mimeType: clean } = await downloadWhatsAppMedia(mediaId, mimeType, 'photo');
+  const menuListing = buildMenuListingForAI();
+
+  const prompt = `A customer of a Belize drinks/food shop sent this photo${caption ? ` with the caption: "${caption}"` : ''}.
+
+Our exact menu (categoryId.itemIndex | category | name | price):
+${menuListing}
+
+Identify which menu item(s) the photo could be.
+
+Rules:
+- Every name in "candidates" MUST be copied character-for-character from the menu above. Never invent an item.
+- "confidence": "high" only when the photo unmistakably shows ONE specific item.
+  "medium" when you can narrow it to a few plausible items (e.g. it's clearly a
+  frozen strawberry drink but we sell several). "low" when you really can't tell.
+- List up to 3 candidates, best first. Use an empty list only if nothing on our
+  menu plausibly matches, or the photo isn't food at all.
+- "description": SHORT neutral description of what you actually see (max 12 words).
+
+Respond with ONLY raw JSON, no markdown:
+{"candidates": ["Mango", "Mango/Pine"], "confidence": "medium", "description": "a bright orange frozen drink"}`;
+
+  const result = await withTimeout(genAI.models.generateContent({
+    model: 'gemini-3.1-flash-lite',
+    contents: [{ text: prompt }, { inlineData: { mimeType: clean, data } }],
+    config: { temperature: 0 },
+  }), 25000);
+
+  const raw = (result.text || '').trim().replace(/^```(?:json)?|```$/g, '').trim();
+  let parsed;
+  try {
+    parsed = JSON.parse(raw);
+  } catch (err) {
+    console.warn('Photo recognition returned unparseable JSON:', raw.slice(0, 200));
+    return { confidence: 'low', hits: [], description: '' };
+  }
+
+  // Trust the model's LABELS but resolve each against the real menu — a
+  // hallucinated name would otherwise flow into the order path as if real.
+  // Sold-out items are dropped here too, so we never offer something we
+  // can't actually make.
+  const hits = [];
+  for (const name of (Array.isArray(parsed.candidates) ? parsed.candidates : []).slice(0, 3)) {
+    const found = findMenuItemByName(String(name || '').trim());
+    if (!found) continue;
+    if (isItemSoldOut(found.categoryId, found.itemIndex)) continue;
+    if (hits.some(h => h.item === found.item)) continue;
+    hits.push({ cat: MENU.find(c => c.id === found.categoryId), item: found.item, itemIndex: found.itemIndex });
+  }
+
+  const claimed = String(parsed.confidence || '').toLowerCase();
+  const confidence = ['high', 'medium', 'low'].includes(claimed) ? claimed : 'low';
+  return {
+    // "high" only survives if exactly one real, in-stock item backs it —
+    // several candidates means it isn't actually unambiguous, whatever the
+    // model said.
+    confidence: confidence === 'high' && hits.length !== 1 ? 'medium' : confidence,
+    hits,
+    description: String(parsed.description || '').slice(0, 120),
+  };
+}
 
 async function interpretMessage(rawMsg) {
   const menuListing = buildMenuListingForAI();
@@ -3098,12 +3437,37 @@ app.post('/whatsapp', async (req, res) => {
     return res.sendStatus(200);
   }
 
+  // Muscle-memory double-tap on the SAME button — two message ids, identical
+  // payload, milliseconds apart. Dropped before the rate limiter so a
+  // fast tapper doesn't burn their own budget on taps we're discarding
+  // anyway. Interactive ids only: repeating typed text is legitimate
+  // ("yes" twice is a real answer to the duplicate-order warning).
+  if (message.type === 'interactive') {
+    const inter = message.interactive || {};
+    const tapId = (inter.button_reply && inter.button_reply.id) || (inter.list_reply && inter.list_reply.id) || '';
+    if (isRepeatTap(from, tapId)) {
+      console.warn(`Repeat tap "${tapId}" from ${from} within ${TAP_DEBOUNCE_MS}ms — ignoring.`);
+      return res.sendStatus(200);
+    }
+  }
+
   if (isRateLimited('__global__', RATE_LIMIT_GLOBAL)) {
     console.warn('Global rate limit hit — dropping request.');
     return res.sendStatus(200);
   }
   if (isRateLimited(from, RATE_LIMIT_PER_SENDER)) {
+    // Previously a silent drop, which is how a real customer got cut off
+    // mid-order with no idea why — they just saw the bot stop responding.
+    // Tell them once per window instead; the cooldown keeps the notice
+    // itself from becoming the spam.
     console.warn(`Rate limit hit for ${from} — dropping request.`);
+    if (!isRateLimited(`__notice__${from}`, RATE_LIMIT_NOTICE)) {
+      const lang = (sessions[from] && sessions[from].language) || null;
+      const en = "Whoa, that was quick! 😅 Give me a couple of seconds to catch up — your order is safe.";
+      const es = '¡Uy, qué rápido! 😅 Dame unos segundos para ponerme al día — tu orden está a salvo.';
+      sendWhatsAppMessage(from, lang === 'es' ? es : lang === 'en' ? en : `${en}\n\n${es}`)
+        .catch(e => console.error('Rate-limit notice failed:', e.message || e));
+    }
     return res.sendStatus(200);
   }
 
@@ -3388,10 +3752,111 @@ async function processWhatsAppMessage(message, res) {
           'Lo sentimos, tuve problemas con el mensaje de voz — ¿puedes escribirlo? 🙏'
         ));
       }
+    } else if (message.type === 'location') {
+      // A shared pin is far better than a typed address here — local
+      // addresses are often landmark-based ("house behind the blue gate"),
+      // which a driver can't navigate to. Handled inline rather than being
+      // turned into rawMsg, because a location isn't a phrase the rest of
+      // the pipeline could interpret.
+      const loc = message.location || {};
+      const lat = loc.latitude;
+      const lon = loc.longitude;
+      const sess = session;
+      const lang0 = sess.language || 'en';
+      if (typeof lat !== 'number' || typeof lon !== 'number') {
+        return sendReply(res, from, bilingual(
+          "That location didn't come through — could you try sharing it again, or type the address? 🙏",
+          'Esa ubicación no llegó bien — ¿puedes compartirla de nuevo o escribir la dirección? 🙏'
+        ));
+      }
+
+      // A Google Maps link is what actually helps the driver; the label (if
+      // WhatsApp supplied one) helps the customer recognise it.
+      const label = [loc.name, loc.address].filter(Boolean).join(', ');
+      const mapsLink = `https://maps.google.com/?q=${lat},${lon}`;
+      const addressText = `${label ? `${label}\n` : ''}📍 ${mapsLink}`;
+
+      if (sess.step === 'address') {
+        sess.address = addressText.slice(0, MAX_ADDRESS_LENGTH);
+        // A pin is precise, but a gate colour or house number still helps —
+        // same optional, one-tap-skippable step the typed path uses.
+        sess.step = 'deliveryNote';
+        saveCustomerProfile(from, { savedAddress: sess.address })
+          .catch(err => console.error(`Failed to save shared location for ${from}:`, err.message || err));
+        return sendReply(res, from, deliveryNoteMessage(lang0));
+      }
+
+      // Shared outside the address step — acknowledge and keep it, so a
+      // customer who pins their location early doesn't have to repeat it.
+      saveCustomerProfile(from, { savedAddress: addressText.slice(0, MAX_ADDRESS_LENGTH) })
+        .catch(err => console.error(`Failed to save shared location for ${from}:`, err.message || err));
+      return sendReply(res, from, bilingual(
+        `📍 Got your location, thanks! I've saved it for your delivery.`,
+        `📍 ¡Recibimos tu ubicación, gracias! La guardamos para tu entrega.`
+      ));
+    } else if (message.type === 'image') {
+      const mediaId = message.image && message.image.id;
+      const mimeType = (message.image && message.image.mime_type) || '';
+      const caption = (message.image && message.image.caption) || '';
+      try {
+        // At the delivery-note step a photo is the customer's HOUSE, not
+        // food — describe it for the driver instead of matching the menu.
+        if (session.step === 'deliveryNote') {
+          const desc = await describePhotoForDriver(mediaId, mimeType, caption);
+          const lang0 = session.language || 'en';
+          const tt = TXT[lang0];
+          session.deliveryNote = [caption, desc].filter(Boolean).join(' — ').slice(0, MAX_ADDRESS_LENGTH);
+          session.step = 'confirm';
+          return sendReply(res, from, [
+            session.deliveryNote ? tt.deliveryNoteSaved : null,
+            cartText(session.cart, lang0),
+            confirmButtonsMessage(tt.deliveryConfirm(session.address), lang0),
+          ].filter(Boolean));
+        }
+
+        const guess = await identifyItemFromPhoto(mediaId, mimeType, caption);
+        const lang0 = session.language || 'en';
+        const seen = guess.description
+          ? (lang0 === 'es' ? `Veo ${guess.description}. ` : `I can see ${guess.description}. `)
+          : '';
+
+        if (guess.confidence === 'high' && guess.hits.length === 1) {
+          // Unambiguous: feed the recognised NAME through the normal text
+          // pipeline, so photo ordering reuses all the existing matching,
+          // sold-out and cart logic instead of a parallel path.
+          const name = guess.hits[0].item.name;
+          rawMsg = caption ? `${name} ${caption}` : name;
+          console.log(`Photo from ${from} recognised as "${name}" (high)`);
+        } else if (guess.hits.length > 0) {
+          // Narrowed but not certain — offer the candidates instead of
+          // giving up. Rows reuse the self-describing item:<cat>:<idx> ids,
+          // so tapping one routes exactly like picking it from a category.
+          console.log(`Photo from ${from}: ${guess.hits.length} candidate(s), confidence ${guess.confidence}`);
+          return sendReply(res, from, [
+            lang0 === 'es'
+              ? `📷 ${seen}¿Es alguno de estos?`
+              : `📷 ${seen}Is it one of these?`,
+            recommendationMessage(guess.hits, lang0),
+          ]);
+        } else {
+          return sendReply(res, from, [
+            lang0 === 'es'
+              ? `📷 ${seen}Pero no estoy seguro de cuál artículo del menú es. ¿Me dices el nombre o eliges del menú?`
+              : `📷 ${seen}But I'm not sure which menu item that is. Could you tell me the name, or pick from the menu?`,
+            ...categoryListMessages(lang0),
+          ]);
+        }
+      } catch (imgErr) {
+        console.error('Photo recognition failed:', imgErr);
+        return sendReply(res, from, bilingual(
+          "Sorry, I couldn't open that photo — could you tell me what you'd like instead? 🙏",
+          'Lo sentimos, no pude abrir esa foto — ¿me dices qué te gustaría? 🙏'
+        ));
+      }
     } else {
       return sendReply(res, from, bilingual(
-        'Sorry, I can only handle text and voice messages right now — please type instead. 🙏',
-        'Lo siento, solo puedo procesar mensajes de texto y voz por ahora — por favor escribe tu mensaje. 🙏'
+        'Sorry, I can only handle text, voice notes, photos and shared locations right now — please type instead. 🙏',
+        'Lo siento, por ahora solo puedo procesar texto, notas de voz, fotos y ubicaciones — por favor escribe tu mensaje. 🙏'
       ));
     }
 
@@ -4155,6 +4620,9 @@ async function processWhatsAppMessage(message, res) {
         const savedAddr = getSavedAddress(from);
         if (msg === 'use_saved_address' && savedAddr) {
           session.address = savedAddr;
+          // A returning customer's saved address has already been delivered
+          // to before, so skip straight to confirm rather than asking for
+          // landmarks they've effectively already given us.
           session.step = 'confirm';
           reply = [cartText(session.cart, lang), confirmButtonsMessage(t.deliveryConfirm(session.address), lang)];
           break;
@@ -4179,12 +4647,40 @@ async function processWhatsAppMessage(message, res) {
         // Manager sheet, uncapped it could be up to WhatsApp's own ~4096-
         // char message limit.
         session.address = rawMsg.trim().slice(0, MAX_ADDRESS_LENGTH);
-        session.step = 'confirm';
+        // Ask for landmarks BEFORE confirming — a first-time address is
+        // exactly when a driver is most likely to get lost. One tap skips it.
+        session.step = 'deliveryNote';
         // Fire-and-forget write-through — saved for next time regardless of
         // whether THIS order goes on to be confirmed or cancelled; it's a
         // convenience cache, not tied to any one order's outcome.
         saveCustomerProfile(from, { savedAddress: rawMsg }).catch(err => console.error(`Failed to save address for ${from}:`, err.message || err));
-        reply = [cartText(session.cart, lang), confirmButtonsMessage(t.deliveryConfirm(session.address), lang)];
+        reply = deliveryNoteMessage(lang);
+        break;
+      }
+
+      case 'deliveryNote': {
+        // Reached only for deliveries, right after a NEW address. Text,
+        // voice (already transcribed into rawMsg upstream) and photos (turned
+        // into a description upstream) all arrive here as plain text.
+        if (msg === 'skip' || msg === 'omitir' || msg === 'no' || msg === 'none' || msg === 'ninguno') {
+          session.deliveryNote = '';
+        } else if (msg === '0' || msg === 'atras' || msg === 'atrás' || msg === 'back') {
+          session.step = 'address';
+          reply = t.askAddress(SHOP_INFO.deliveryFee);
+          break;
+        } else if (message.type === 'interactive') {
+          // Stale tap on some older button — same guard as 'notes'/'address'.
+          reply = deliveryNoteMessage(lang);
+          break;
+        } else {
+          session.deliveryNote = rawMsg.trim().slice(0, MAX_ADDRESS_LENGTH);
+        }
+        session.step = 'confirm';
+        reply = [
+          session.deliveryNote ? t.deliveryNoteSaved : null,
+          cartText(session.cart, lang),
+          confirmButtonsMessage(t.deliveryConfirm(session.address), lang),
+        ].filter(Boolean);
         break;
       }
 
@@ -4479,7 +4975,8 @@ app.get('/kitchen/orders', async (req, res) => {
       const [orderNumber, timestamp, items, total, mode, language, phone, status] = r;
       return {
         rowNum: i + 2, // sheet row (header is row 1) — used for the status write
-        orderNumber, timestamp, items, total, mode, language, phone,
+        orderNumber, timestamp, items, mode, language, phone,
+        total: formatMoney(total) || '—',
         status: (status || 'Confirmed').trim(),
       };
     }).filter(o => o.orderNumber && !['Completed', 'Cancelled'].includes(o.status));
@@ -4548,50 +5045,97 @@ const KITCHEN_HTML = `<!doctype html>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Kitchen — Créme De La Créme</title>
 <style>
-  :root { --bg:#12141a; --card:#1c1f28; --line:#2c3140; --text:#f2f4f8; --dim:#98a0b3;
-          --new:#ffb020; --prep:#3b82f6; --ready:#22c55e; --deliver:#a855f7; }
+  /* Day default, matching the driver board; Night is one tap away and
+     remembered per device. Kitchens vary wildly in lighting, so the choice
+     belongs to whoever is standing in front of the tablet. */
+  :root { --bg:#f6f7f9; --card:#ffffff; --line:#dde1e8; --text:#11141a; --dim:#5b6373;
+          --new:#c2740a; --prep:#1d4ed8; --ready:#15803d; --deliver:#7c3aed;
+          --brand:#b4304f; --shadow:0 1px 3px rgba(16,20,30,.10); --flash:#ffeec2;
+          --surface2:#eef0f4; --surface3:#e3e6ec; --onAccent:#ffffff; --bad:#dc2626; }
+  :root[data-theme="night"] { --bg:#12141a; --card:#1c1f28; --line:#2c3140; --text:#f2f4f8;
+          --dim:#98a0b3; --new:#ffb020; --prep:#3b82f6; --ready:#22c55e; --deliver:#a855f7;
+          --brand:#ff8fa8; --shadow:none; --flash:#3a2f12;
+          --surface2:#252a36; --surface3:#2f3543; --onAccent:#04210f; --bad:#ef4444; }
   * { box-sizing:border-box; }
   body { margin:0; background:var(--bg); color:var(--text);
-         font:16px/1.5 system-ui,-apple-system,Segoe UI,Roboto,sans-serif; }
+         font:16px/1.5 system-ui,-apple-system,Segoe UI,Roboto,sans-serif;
+         -webkit-text-size-adjust:100%; }
   header { position:sticky; top:0; background:var(--bg); border-bottom:1px solid var(--line);
            padding:14px 18px; display:flex; align-items:center; gap:14px; z-index:5; }
-  h1 { font-size:19px; margin:0; font-weight:650; }
-  .count { background:var(--new); color:#000; font-weight:700; border-radius:999px;
+  h1 { font-size:19px; margin:0; font-weight:700; letter-spacing:-.01em; }
+  h1 .brand { color:var(--brand); }
+  .count { background:var(--new); color:#fff; font-weight:700; border-radius:999px;
            padding:2px 11px; font-size:15px; }
+  #theme { background:var(--card); color:var(--text); border:1px solid var(--line);
+           border-radius:8px; padding:7px 11px; font:inherit; font-size:14px;
+           font-weight:600; cursor:pointer; min-height:0; }
   .muted { color:var(--dim); font-size:13px; margin-left:auto; }
+  .legend { display:flex; gap:12px; flex-wrap:wrap; font-size:12px; color:var(--dim); }
+  .legend span { display:flex; align-items:center; gap:5px; }
+  .legend i { width:11px; height:11px; border-radius:3px; display:inline-block; }
+  /* min() so a 320px phone gets one full-width column instead of a card
+     wider than the screen forcing a horizontal scroll. */
   main { padding:16px; display:grid; gap:14px;
-         grid-template-columns:repeat(auto-fill,minmax(330px,1fr)); }
-  .card { background:var(--card); border:1px solid var(--line); border-left:5px solid var(--new);
-          border-radius:12px; padding:15px; }
+         grid-template-columns:repeat(auto-fill,minmax(min(330px,100%),1fr)); }
+  .card { background:var(--card); border:1px solid var(--line); border-left:6px solid var(--new);
+          border-radius:12px; padding:15px; box-shadow:var(--shadow); }
   .card.s-Preparing { border-left-color:var(--prep); }
   .card.s-Ready { border-left-color:var(--ready); }
   .card.s-Out { border-left-color:var(--deliver); }
   .card.flash { animation:flash 1s ease-in-out 3; }
-  @keyframes flash { 0%,100%{background:var(--card);} 50%{background:#3a2f12;} }
+  @keyframes flash { 0%,100%{background:var(--card);} 50%{background:var(--flash);} }
   .top { display:flex; align-items:baseline; gap:10px; margin-bottom:8px; }
   .num { font-size:23px; font-weight:700; }
   .time { color:var(--dim); font-size:13px; margin-left:auto; }
   .mode { font-size:14px; font-weight:600; margin-bottom:8px; }
-  .items { white-space:pre-line; margin:10px 0; padding:10px; background:#161923;
-           border-radius:8px; font-size:15px; }
+  .items { white-space:pre-line; margin:10px 0; padding:10px; background:var(--bg);
+           border:1px solid var(--line); border-radius:8px; font-size:15px; }
   .meta { color:var(--dim); font-size:13px; margin:3px 0; word-break:break-word; }
   .status { display:inline-block; font-size:12px; font-weight:700; text-transform:uppercase;
             letter-spacing:.04em; color:var(--dim); margin-bottom:9px; }
   .btns { display:flex; flex-wrap:wrap; gap:7px; margin-top:11px; }
   button { font:inherit; font-size:14px; font-weight:600; border:1px solid var(--line);
-           background:#252a36; color:var(--text); border-radius:8px; padding:9px 13px;
+           background:var(--surface2); color:var(--text); border-radius:8px; padding:9px 13px;
            cursor:pointer; min-height:42px; }
-  button:hover { background:#2f3543; }
+  button:hover { background:var(--surface3); }
   button:disabled { opacity:.45; cursor:default; }
-  button.go { background:var(--ready); color:#04210f; border-color:transparent; }
-  button.warn { background:#3a2020; color:#ffc9c9; border-color:#5a2b2b; }
+  button.go { background:var(--ready); color:var(--onAccent); border-color:transparent; }
+  button.warn { background:var(--bad); color:#fff; border-color:transparent; }
+  button.msg { background:var(--prep); color:#fff; border-color:transparent; }
+  .notebox { margin-top:11px; border-top:1px solid var(--line); padding-top:11px; }
+  .notebox textarea { width:100%; font:inherit; font-size:15px; padding:10px; border-radius:8px;
+    border:1px solid var(--line); background:var(--bg); color:var(--text); resize:vertical; }
+  .noterow { display:flex; gap:8px; align-items:flex-start; margin-top:8px; flex-wrap:wrap; }
+  .quick { display:flex; gap:6px; flex-wrap:wrap; flex:1; }
+  button.chip { font-size:12px; font-weight:500; padding:6px 10px; min-height:0;
+    background:var(--surface2); color:var(--dim); border:1px solid var(--line); border-radius:999px; }
+  button.chip:hover { color:var(--text); }
+  button.send { background:var(--prep); color:#fff; border-color:transparent; }
+  .lbl { font-size:12px; color:var(--dim); }
+  .sent:not(:empty) { margin-top:7px; color:var(--ready); }
   .empty { color:var(--dim); text-align:center; padding:70px 20px; grid-column:1/-1; }
   #login { max-width:340px; margin:16vh auto; padding:26px; background:var(--card);
            border:1px solid var(--line); border-radius:12px; }
   #login input { width:100%; font:inherit; padding:12px; margin:12px 0; border-radius:8px;
-                 border:1px solid var(--line); background:#161923; color:var(--text); }
-  #login button { width:100%; background:var(--ready); color:#04210f; border-color:transparent; }
+                 border:1px solid var(--line); background:var(--bg); color:var(--text); }
+  #login button { width:100%; background:var(--ready); color:var(--onAccent); border-color:transparent; }
   .err { color:#ff9b9b; font-size:14px; min-height:20px; }
+
+  /* Phones. The header carries a title, count, 4-item legend and a
+     timestamp — it has to be allowed to wrap or it pushes the page wide. */
+  @media (max-width:640px){
+    header { flex-wrap:wrap; gap:8px; padding:11px 13px; }
+    h1 { font-size:17px; }
+    .muted { margin-left:0; width:100%; }
+    .legend { gap:9px; font-size:11px; }
+    main { padding:11px; gap:11px; }
+    .card { padding:13px; }
+    .num { font-size:21px; }
+    /* Full-width taps: easier to hit accurately with one hand. */
+    .btns button { flex:1 1 46%; }
+    .notebox textarea { font-size:16px; } /* 16px stops iOS zooming on focus */
+  }
+  @media (max-width:380px){ .btns button { flex:1 1 100%; } }
 </style>
 </head>
 <body>
@@ -4604,7 +5148,14 @@ const KITCHEN_HTML = `<!doctype html>
 
 <div id="app" hidden>
   <header>
-    <h1>Orders</h1><span class="count" id="count">0</span>
+    <h1><span class="brand">🍧 Créme</span> · Kitchen</h1><span class="count" id="count">0</span>
+    <button id="theme" onclick="toggleTheme()">🌙 Night</button>
+    <span class="legend">
+      <span><i style="background:var(--new)"></i>New</span>
+      <span><i style="background:var(--prep)"></i>Preparing</span>
+      <span><i style="background:var(--ready)"></i>Ready</span>
+      <span><i style="background:var(--deliver)"></i>Out</span>
+    </span>
     <span class="muted" id="updated">—</span>
   </header>
   <main id="list"></main>
@@ -4613,6 +5164,21 @@ const KITCHEN_HTML = `<!doctype html>
 <script>
 var seen = JSON.parse(sessionStorage.getItem('seenOrders') || '[]');
 var first = true;
+
+// Day default; the choice sticks per device. Kitchens vary wildly in
+// lighting, so this belongs to whoever is standing at the tablet.
+function applyTheme(t){
+  if(t==='night') document.documentElement.setAttribute('data-theme','night');
+  else document.documentElement.removeAttribute('data-theme');
+  var b=document.getElementById('theme');
+  if(b) b.textContent = t==='night' ? '☀️ Day' : '🌙 Night';
+}
+function toggleTheme(){
+  var next = document.documentElement.getAttribute('data-theme')==='night' ? 'day' : 'night';
+  try { localStorage.setItem('kitchenTheme', next); } catch(e){}
+  applyTheme(next);
+}
+try { applyTheme(localStorage.getItem('kitchenTheme') || 'day'); } catch(e){ applyTheme('day'); }
 
 function esc(s){ return String(s == null ? '' : s).replace(/[&<>"']/g, function(c){
   return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]; }); }
@@ -4651,6 +5217,57 @@ function setStatus(rowNum, orderNumber, status, btn){
     .catch(function(e){ alert(e.message); btn.disabled = false; });
 }
 
+// Inline compose box rather than a prompt() popup — kiosk and locked-down
+// tablet browsers block prompt(), and typing into a modal one-handed beside
+// a hot line is miserable. The box also survives the 10s auto-refresh: see
+// the openNotes guard in load().
+// { orderNumber: draftText } for boxes the user has open. Drafts are
+// snapshotted before every re-render and restored after, because the list
+// refreshes every 10s and would otherwise delete whatever staff were
+// halfway through typing.
+var openNotes = {};
+
+function snapshotNotes(){
+  Object.keys(openNotes).forEach(function(n){
+    var box = document.getElementById('note_' + n);
+    var ta = box && box.querySelector('textarea');
+    if (ta) openNotes[n] = ta.value;
+  });
+}
+
+function toggleNote(orderNumber){
+  var box = document.getElementById('note_' + orderNumber);
+  if (!box) return;
+  if (box.hasAttribute('hidden')) {
+    box.removeAttribute('hidden');
+    openNotes[orderNumber] = openNotes[orderNumber] || '';
+    var ta = box.querySelector('textarea'); if (ta) ta.focus();
+  } else {
+    box.setAttribute('hidden','');
+    delete openNotes[orderNumber];
+  }
+}
+
+function sendNote(rowNum, orderNumber, btn){
+  var box = document.getElementById('note_' + orderNumber);
+  var ta = box.querySelector('textarea');
+  var text = (ta.value || '').trim();
+  if (!text) { ta.focus(); return; }
+  btn.disabled = true; var old = btn.textContent; btn.textContent = 'Sending…';
+  fetch('/kitchen/message', { method:'POST', headers:{'Content-Type':'application/json'},
+                              body: JSON.stringify({ rowNum: rowNum, orderNumber: orderNumber, text: text }) })
+    .then(function(r){ return r.json().then(function(j){ if(!r.ok) throw new Error(j.error||'failed'); }); })
+    .then(function(){
+      ta.value = '';
+      openNotes[orderNumber] = ''; // clear the saved draft too, not just the field
+      btn.textContent = 'Sent ✓';
+      var st = box.querySelector('.sent');
+      if (st) st.textContent = 'Sent to the customer just now.';
+      setTimeout(function(){ btn.textContent = old; btn.disabled = false; }, 2000);
+    })
+    .catch(function(e){ alert(e.message); btn.textContent = old; btn.disabled = false; });
+}
+
 function card(o){
   var short = o.status === 'Ready for Pickup' ? 'Ready'
             : o.status === 'Out for Delivery' ? 'Out' : o.status;
@@ -4680,6 +5297,37 @@ function card(o){
     b.onclick = function(){ setStatus(o.rowNum, o.orderNumber, pair[0], b); };
     btns.appendChild(b);
   });
+  if (o.phone) {
+    var mb = document.createElement('button');
+    mb.textContent = '💬 Message';
+    mb.className = 'msg';
+    mb.onclick = function(){ toggleNote(o.orderNumber); };
+    btns.appendChild(mb);
+
+    var box = document.createElement('div');
+    box.className = 'notebox';
+    box.id = 'note_' + o.orderNumber;
+    if (openNotes[o.orderNumber] === undefined) box.setAttribute('hidden','');
+    box.innerHTML =
+      '<textarea rows="2" maxlength="600" placeholder="Message the customer — e.g. the one marked [P] has pepper"></textarea>' +
+      '<div class="noterow">' +
+        '<span class="quick">' +
+          '<button type="button" class="chip">The one marked [P] has pepper</button>' +
+          '<button type="button" class="chip">Running about 10 minutes late</button>' +
+          '<button type="button" class="chip">We are out of that — pick another?</button>' +
+        '</span>' +
+        '<button type="button" class="send">Send</button>' +
+      '</div><div class="sent lbl"></div>';
+    var ta = box.querySelector('textarea');
+    if (openNotes[o.orderNumber]) ta.value = openNotes[o.orderNumber]; // restore draft across refreshes
+    ta.addEventListener('input', function(){ openNotes[o.orderNumber] = ta.value; });
+    // Tap a chip to drop common wording in, still editable before sending.
+    box.querySelectorAll('.chip').forEach(function(c){
+      c.onclick = function(){ ta.value = c.textContent; openNotes[o.orderNumber] = ta.value; ta.focus(); };
+    });
+    box.querySelector('.send').onclick = function(){ sendNote(o.rowNum, o.orderNumber, box.querySelector('.send')); };
+    d.appendChild(box);
+  }
   return d;
 }
 
@@ -4692,6 +5340,7 @@ function load(){
     .then(function(data){
       document.getElementById('login').hidden = true;
       document.getElementById('app').hidden = false;
+      snapshotNotes(); // keep half-typed messages alive across the refresh
       var list = document.getElementById('list');
       list.innerHTML = '';
       var orders = data.orders || [];
@@ -4721,6 +5370,926 @@ document.getElementById('pw').addEventListener('keydown', function(e){
 </script>
 </body>
 </html>`;
+
+// Staff-to-customer message, e.g. "the one marked [P] has pepper", "we're
+// out of pickles — is mayo okay?". Free text written by a human and sent to
+// a real customer, so it's fenced in carefully:
+//   - same auth + row-verification as the status route, so a shifted sheet
+//     row can't send one customer's message to a different customer
+//   - prefixed with the shop name so it never reads like a stranger texting
+//   - length-capped, matching how customer-supplied text is treated
+//   - logged, since there's no other record of what staff sent
+const MAX_KITCHEN_NOTE_LENGTH = 600;
+
+app.post('/kitchen/message', async (req, res) => {
+  if (!requireKitchenAuth(req, res)) return;
+  const { rowNum, orderNumber, text } = req.body || {};
+  const body = String(text || '').trim();
+  if (!body) return res.status(400).json({ error: 'empty message' });
+  if (!Number.isInteger(rowNum) || rowNum < 2) return res.status(400).json({ error: 'bad row' });
+
+  try {
+    const rows = await fetchManagerRows();
+    const current = rows[rowNum - 2];
+    if (!current || String(current[0]) !== String(orderNumber)) {
+      return res.status(409).json({ error: 'This order moved in the sheet — refresh and try again.' });
+    }
+    const phone = String(current[6] || '').replace(/^\+/, '');
+    if (!phone) return res.status(400).json({ error: 'No phone number on file for this order.' });
+
+    const lang = current[5] === 'es' ? 'es' : 'en';
+    const header = lang === 'es'
+      ? `💬 *Créme De La Créme* — sobre tu orden #${orderNumber}:`
+      : `💬 *Créme De La Créme* — about your order #${orderNumber}:`;
+    await sendWhatsAppMessage(phone, `${header}\n\n${body.slice(0, MAX_KITCHEN_NOTE_LENGTH)}`);
+    console.log(`Kitchen dashboard: message sent to order #${orderNumber}: ${body.slice(0, 80)}`);
+    res.json({ ok: true });
+  } catch (err) {
+    console.error('Kitchen dashboard message failed:', err.message || err);
+    res.status(500).json({ error: 'could not send message' });
+  }
+});
+
+// ---- DRIVER DASHBOARD ----
+// Deliveries only, built for one hand on a phone while standing next to a
+// bike: the map link, the landmark note, tap-to-call, and one button to mark
+// it delivered. Its own password — a driver is often not staff, and shouldn't
+// hold the kitchen or manager credential.
+const DRIVER_COOKIE = 'driver_auth';
+
+function driverPasswordHash() {
+  return crypto.createHash('sha256').update(String(process.env.DRIVER_PASSWORD || '')).digest('hex');
+}
+
+function requireDriverAuth(req, res) {
+  if (!process.env.DRIVER_PASSWORD) {
+    res.status(503).json({ error: 'Driver dashboard is not configured — set DRIVER_PASSWORD.' });
+    return false;
+  }
+  const raw = req.headers.cookie || '';
+  const match = raw.split(';').map(c => c.trim()).find(c => c.startsWith(`${DRIVER_COOKIE}=`));
+  const supplied = match ? match.slice(DRIVER_COOKIE.length + 1) : '';
+  const a = Buffer.from(supplied);
+  const b = Buffer.from(driverPasswordHash());
+  if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) {
+    res.status(401).json({ error: 'unauthorized' });
+    return false;
+  }
+  return true;
+}
+
+app.post('/driver/login', (req, res) => {
+  if (!process.env.DRIVER_PASSWORD) return res.status(503).json({ error: 'not configured' });
+  const supplied = String((req.body && req.body.password) || '');
+  const a = Buffer.from(crypto.createHash('sha256').update(supplied).digest('hex'));
+  const b = Buffer.from(driverPasswordHash());
+  if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) {
+    return res.status(401).json({ error: 'wrong password' });
+  }
+  res.setHeader('Set-Cookie', `${DRIVER_COOKIE}=${driverPasswordHash()}; Max-Age=31536000; Path=/driver; HttpOnly; SameSite=Lax`);
+  res.json({ ok: true });
+});
+
+app.get('/driver/orders', async (req, res) => {
+  if (!requireDriverAuth(req, res)) return;
+  try {
+    managerRowsCache = null;
+    const rows = await fetchManagerRows();
+    const orders = rows.map((r, i) => {
+      const [orderNumber, timestamp, items, total, mode, language, phone, status] = r;
+      return {
+        rowNum: i + 2, orderNumber, timestamp, items, mode, phone,
+        // Always two decimals — a driver collecting cash shouldn't have to
+        // read "$14.5" off a sheet cell and work out what to ask for.
+        total: formatMoney(total) || '—',
+        status: (status || 'Confirmed').trim(),
+      };
+    }).filter(o =>
+      o.orderNumber &&
+      String(o.mode || '').toLowerCase().startsWith('delivery') &&
+      !['Completed', 'Cancelled'].includes(o.status)
+    );
+    orders.reverse();
+
+    // Split the mode cell back into address and the landmark note the
+    // deliveryNote step captured — logOrderToSheets writes it as
+    // "Delivery - <address> (<landmark>)".
+    for (const o of orders) {
+      const raw = String(o.mode).replace(/^delivery\s*-\s*/i, '');
+      const m = raw.match(/^([\s\S]*?)\s*\(([^()]*)\)\s*$/);
+      o.address = (m ? m[1] : raw).trim();
+      o.landmark = m ? m[2].trim() : '';
+      const link = o.address.match(/https?:\/\/\S+/);
+      o.mapsLink = link ? link[0] : `https://maps.google.com/?q=${encodeURIComponent(o.address)}`;
+    }
+    res.json({ orders });
+  } catch (err) {
+    console.error('Driver dashboard fetch failed:', err.message || err);
+    res.status(500).json({ error: 'could not load deliveries' });
+  }
+});
+
+app.post('/driver/status', async (req, res) => {
+  if (!requireDriverAuth(req, res)) return;
+  const { rowNum, orderNumber, status } = req.body || {};
+  // Deliberately narrower than the kitchen's list — a driver moves an order
+  // out and marks it delivered, nothing else.
+  if (!['Out for Delivery', 'Completed'].includes(status)) return res.status(400).json({ error: 'unknown status' });
+  if (!Number.isInteger(rowNum) || rowNum < 2) return res.status(400).json({ error: 'bad row' });
+  try {
+    const rows = await fetchManagerRows();
+    const current = rows[rowNum - 2];
+    if (!current || String(current[0]) !== String(orderNumber)) {
+      return res.status(409).json({ error: 'This order moved in the sheet — refresh and try again.' });
+    }
+    await withSessionLock('__sheets_manager_kitchen_write__', async () => {
+      await withTimeout(sheets.spreadsheets.values.update({
+        spreadsheetId: process.env.GOOGLE_SHEETS_ID,
+        range: `Manager!H${rowNum}`,
+        valueInputOption: 'USER_ENTERED',
+        requestBody: { values: [[status]] },
+      }), 6000);
+    });
+    managerRowsCache = null;
+    console.log(`Driver dashboard: order #${orderNumber} -> ${status}`);
+    await notifyStatusChange({
+      orderNumber: String(orderNumber), timestamp: current[1], status,
+      language: current[5], phoneCell: current[6],
+    });
+    res.json({ ok: true });
+  } catch (err) {
+    console.error('Driver status update failed:', err.message || err);
+    res.status(500).json({ error: 'could not update status' });
+  }
+});
+
+const DRIVER_HTML = `<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Deliveries — Créme De La Créme</title>
+<style>
+  /* DAY is the default. This screen is read outdoors in direct Belize sun
+     far more often than anywhere else, and a dark UI is close to unreadable
+     there — bright background plus near-black text is what survives glare.
+     NIGHT is one tap away for evening runs and is remembered per device. */
+  :root { --bg:#ffffff; --card:#ffffff; --line:#c7ccd6; --text:#0b0d12; --dim:#4a5160;
+          --go:#15803d; --out:#7c3aed; --call:#1d4ed8; --land-bg:#fff8e1;
+          --land-line:#d9a400; --land-text:#4a3600; --shadow:0 1px 3px rgba(0,0,0,.14);
+          --brand:#b4304f; }
+  :root[data-theme="night"] { --bg:#12141a; --card:#1c1f28; --line:#2c3140; --text:#f2f4f8;
+          --dim:#98a0b3; --go:#22c55e; --out:#a855f7; --call:#3b82f6; --land-bg:#2a2416;
+          --land-line:#4a3f1f; --land-text:#ffe2a8; --shadow:none; --brand:#ff8fa8; }
+  h1 .brand { color:var(--brand); }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--text);
+         font:16px/1.5 system-ui,-apple-system,Segoe UI,Roboto,sans-serif;
+         -webkit-text-size-adjust:100%; }
+  header { position:sticky; top:0; background:var(--bg); border-bottom:1px solid var(--line);
+           padding:14px 18px; display:flex; align-items:center; gap:12px; z-index:5; }
+  h1 { font-size:19px; margin:0; font-weight:650; }
+  .count { background:var(--out); color:#fff; font-weight:700; border-radius:999px; padding:2px 11px; font-size:15px; }
+  .muted { color:var(--dim); font-size:13px; margin-left:auto; }
+  main { padding:14px; display:grid; gap:14px;
+         grid-template-columns:repeat(auto-fill,minmax(min(320px,100%),1fr)); }
+  .card { background:var(--card); border:1px solid var(--line); border-left:6px solid var(--out);
+          border-radius:12px; padding:15px; box-shadow:var(--shadow); }
+  .top { display:flex; align-items:baseline; gap:10px; }
+  /* Everything below is a size or weight up from the other dashboards —
+     this one gets read at arm's length, in motion, through glare. */
+  .num { font-size:25px; font-weight:800; }
+  .time { color:var(--dim); font-size:13px; margin-left:auto; }
+  .addr { font-size:19px; font-weight:600; margin:10px 0 4px; white-space:pre-line;
+          word-break:break-word; line-height:1.35; }
+  .land { background:var(--land-bg); border:1px solid var(--land-line); color:var(--land-text);
+          border-radius:8px; padding:10px 12px; font-size:15px; font-weight:600; margin:9px 0; }
+  .items { color:var(--dim); font-size:15px; margin:8px 0; white-space:pre-line; }
+  .cash { font-size:21px; font-weight:800; margin-top:8px; }
+  .btns { display:flex; flex-wrap:wrap; gap:8px; margin-top:12px; }
+  /* Solid fills with white text in BOTH themes — a tinted-background button
+     that looks fine indoors washes out completely in sunlight. */
+  a.btn, button { font:inherit; font-size:16px; font-weight:700; border:1px solid var(--line);
+    background:var(--card); color:var(--text); border-radius:9px; padding:12px 15px; cursor:pointer;
+    text-decoration:none; display:inline-block; min-height:48px; }
+  a.map { background:var(--call); color:#fff; border-color:transparent; }
+  a.call { background:var(--go); color:#fff; border-color:transparent; }
+  button.done { background:var(--go); color:#fff; border-color:transparent; }
+  button.out { background:var(--out); color:#fff; border-color:transparent; }
+  .card.flash { animation:flash 1s ease-in-out 3; }
+  @keyframes flash { 0%,100%{ background:var(--card);} 50%{ background:#ffe9b3;} }
+  :root[data-theme="night"] .card.flash { animation-name:flashNight; }
+  @keyframes flashNight { 0%,100%{ background:var(--card);} 50%{ background:#3a2f12;} }
+  #theme { background:var(--card); color:var(--text); min-height:40px; padding:8px 12px;
+           font-size:15px; }
+  .empty { color:var(--dim); text-align:center; padding:70px 20px; grid-column:1/-1; }
+  #login { max-width:340px; margin:16vh auto; padding:26px; background:var(--card);
+           border:1px solid var(--line); border-radius:12px; }
+  #login input { width:100%; font:inherit; padding:12px; margin:12px 0; border-radius:8px;
+                 border:1px solid var(--line); background:var(--bg); color:var(--text); }
+  #login button { width:100%; background:var(--go); color:#04210f; border-color:transparent; }
+  .err { color:#ff9b9b; font-size:14px; min-height:20px; }
+
+  /* This one is used almost entirely on a phone, often one-handed while
+     standing next to a bike — so on small screens every action becomes a
+     full-width target rather than something to aim at. */
+  @media (max-width:640px){
+    header { padding:11px 13px; }
+    h1 { font-size:17px; }
+    main { padding:11px; gap:11px; }
+    .card { padding:13px; }
+    .addr { font-size:17px; }
+    a.btn, button { flex:1 1 100%; text-align:center; font-size:16px; padding:13px 14px; }
+    .btns { gap:9px; }
+  }
+</style>
+</head>
+<body>
+<div id="login" hidden>
+  <h1>Driver Login</h1>
+  <input type="password" id="pw" placeholder="Password" autocomplete="current-password">
+  <button onclick="login()">Enter</button>
+  <div class="err" id="loginErr"></div>
+</div>
+<div id="app" hidden>
+  <header>
+    <h1><span class="brand">🍧 Créme</span> · Deliveries</h1><span class="count" id="count">0</span>
+    <button id="theme" onclick="toggleTheme()">🌙 Night</button>
+    <span class="muted" id="updated">—</span>
+  </header>
+  <main id="list"></main>
+</div>
+<script>
+function esc(s){ return String(s==null?'':s).replace(/[&<>"']/g,function(c){
+  return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];}); }
+
+// Day by default (see the CSS note); the choice sticks per device.
+function applyTheme(t){
+  if(t==='night') document.documentElement.setAttribute('data-theme','night');
+  else document.documentElement.removeAttribute('data-theme');
+  var b=document.getElementById('theme');
+  if(b) b.textContent = t==='night' ? '☀️ Day' : '🌙 Night';
+}
+function toggleTheme(){
+  var next = document.documentElement.getAttribute('data-theme')==='night' ? 'day' : 'night';
+  try { localStorage.setItem('driverTheme', next); } catch(e){}
+  applyTheme(next);
+}
+try { applyTheme(localStorage.getItem('driverTheme') || 'day'); } catch(e){ applyTheme('day'); }
+
+// A driver isn't watching this screen — they're riding. New deliveries get
+// the same audible + visual alert the kitchen board uses, so the dashboard
+// works standalone rather than only as a companion to the WhatsApp ping.
+var seenDeliveries = null;
+function beep(){
+  try {
+    var ctx = new (window.AudioContext || window.webkitAudioContext)();
+    [0,0.28].forEach(function(off){
+      var o=ctx.createOscillator(), g=ctx.createGain();
+      o.connect(g); g.connect(ctx.destination);
+      o.frequency.value=920; o.type='sine';
+      g.gain.setValueAtTime(0.0001, ctx.currentTime+off);
+      g.gain.exponentialRampToValueAtTime(0.34, ctx.currentTime+off+0.02);
+      g.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime+off+0.24);
+      o.start(ctx.currentTime+off); o.stop(ctx.currentTime+off+0.26);
+    });
+  } catch(e){}
+  if (navigator.vibrate) { try { navigator.vibrate([200,90,200]); } catch(e){} }
+}
+
+function login(){
+  fetch('/driver/login',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({password:document.getElementById('pw').value})})
+   .then(function(r){ return r.ok?load():r.json().then(function(j){throw new Error(j.error||'failed');}); })
+   .catch(function(e){ document.getElementById('loginErr').textContent=e.message; });
+}
+
+function setStatus(rowNum,orderNumber,status,btn){
+  btn.disabled=true;
+  fetch('/driver/status',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({rowNum:rowNum,orderNumber:orderNumber,status:status})})
+   .then(function(r){ return r.json().then(function(j){ if(!r.ok) throw new Error(j.error||'failed'); }); })
+   .then(load)
+   .catch(function(e){ alert(e.message); btn.disabled=false; });
+}
+
+function load(){
+  return fetch('/driver/orders').then(function(r){
+    if(r.status===401){ document.getElementById('login').hidden=false;
+      document.getElementById('app').hidden=true; throw new Error('auth'); }
+    return r.json();
+  }).then(function(d){
+    document.getElementById('login').hidden=true;
+    document.getElementById('app').hidden=false;
+    var list=document.getElementById('list'); list.innerHTML='';
+    var os=d.orders||[];
+    document.getElementById('count').textContent=os.length;
+    document.getElementById('updated').textContent='updated '+new Date().toLocaleTimeString();
+    // Alert only on a delivery number we haven't seen before. seenDeliveries
+    // starts null so the very first load after opening the page is silent —
+    // otherwise every login would sound the alarm for existing work.
+    var ids = os.map(function(o){ return String(o.orderNumber); });
+    var fresh = seenDeliveries !== null && ids.some(function(id){ return seenDeliveries.indexOf(id)===-1; });
+    if (fresh) beep();
+    if(!os.length){
+      seenDeliveries = ids;
+      list.innerHTML='<div class="empty">No deliveries right now.</div>';
+      return;
+    }
+    os.forEach(function(o){
+      var isNew = seenDeliveries !== null && seenDeliveries.indexOf(String(o.orderNumber))===-1;
+      var el=document.createElement('div'); el.className='card'+(isNew?' flash':'');
+      var tel=String(o.phone||'').replace(/[^0-9+]/g,'');
+      el.innerHTML='<div class="top"><span class="num">#'+esc(o.orderNumber)+'</span>'+
+        '<span class="time">'+esc(o.timestamp)+'</span></div>'+
+        '<div class="addr">📍 '+esc(o.address)+'</div>'+
+        (o.landmark?'<div class="land">🏠 '+esc(o.landmark)+'</div>':'')+
+        '<div class="items">'+esc(o.items)+'</div>'+
+        '<div class="cash">💵 Collect $'+esc(o.total)+'</div>'+
+        '<div class="btns">'+
+          '<a class="btn map" target="_blank" rel="noopener" href="'+esc(o.mapsLink)+'">🗺️ Navigate</a>'+
+          (tel?'<a class="btn call" href="tel:'+esc(tel)+'">📞 Call</a>':'')+
+        '</div><div class="btns" id="s'+esc(o.orderNumber)+'"></div>';
+      var sb=el.querySelector('#s'+o.orderNumber);
+      if(o.status!=='Out for Delivery'){
+        var b1=document.createElement('button'); b1.className='out'; b1.textContent='🏍️ Picked up';
+        b1.onclick=function(){ setStatus(o.rowNum,o.orderNumber,'Out for Delivery',b1); }; sb.appendChild(b1);
+      }
+      var b2=document.createElement('button'); b2.className='done'; b2.textContent='✅ Delivered';
+      b2.onclick=function(){ setStatus(o.rowNum,o.orderNumber,'Completed',b2); }; sb.appendChild(b2);
+      list.appendChild(el);
+    });
+    seenDeliveries = ids;
+    document.title=(os.length?'('+os.length+') ':'')+'Deliveries';
+  }).catch(function(e){ if(e.message!=='auth') console.error(e); });
+}
+// Keep the screen awake while this page is open, so a driver who props the
+// phone up during a shift keeps seeing (and hearing) new deliveries. This is
+// the honest limit of a web page: once the phone locks or the browser is
+// backgrounded, audio and timers are suspended by the OS and NO web alert
+// will fire. The reliable channel is the WhatsApp message notifyDriver
+// already sends on every delivery order — this dashboard is the working
+// surface (navigate, call, mark delivered), not the alarm.
+var wakeLock = null;
+async function keepAwake(){
+  try {
+    if ('wakeLock' in navigator && document.visibilityState === 'visible') {
+      wakeLock = await navigator.wakeLock.request('screen');
+    }
+  } catch(e){ /* unsupported or denied — nothing to do, page still works */ }
+}
+document.addEventListener('visibilitychange', function(){
+  if (document.visibilityState === 'visible') { keepAwake(); load(); }
+});
+keepAwake();
+
+load(); setInterval(load,15000);
+document.getElementById('pw').addEventListener('keydown',function(e){ if(e.key==='Enter') login(); });
+</script>
+</body>
+</html>`;
+
+app.get('/driver', (req, res) => {
+  if (!process.env.DRIVER_PASSWORD) {
+    return res.status(503).send('Driver dashboard is not configured — set DRIVER_PASSWORD in the environment.');
+  }
+  res.type('html').send(DRIVER_HTML);
+});
+
+// ---- MANAGER DASHBOARD ----
+// Everything the kitchen view deliberately leaves out: money, history,
+// customers, menu availability. Behind its OWN password, not the kitchen
+// one — kitchen staff need the order queue, they don't need revenue totals
+// or the customer list.
+const MANAGER_COOKIE = 'manager_auth';
+
+function managerPasswordHash() {
+  return crypto.createHash('sha256').update(String(process.env.MANAGER_PASSWORD || '')).digest('hex');
+}
+
+function requireManagerAuth(req, res) {
+  if (!process.env.MANAGER_PASSWORD) {
+    res.status(503).json({ error: 'Manager dashboard is not configured — set MANAGER_PASSWORD.' });
+    return false;
+  }
+  const raw = req.headers.cookie || '';
+  const match = raw.split(';').map(c => c.trim()).find(c => c.startsWith(`${MANAGER_COOKIE}=`));
+  const supplied = match ? match.slice(MANAGER_COOKIE.length + 1) : '';
+  const a = Buffer.from(supplied);
+  const b = Buffer.from(managerPasswordHash());
+  if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) {
+    res.status(401).json({ error: 'unauthorized' });
+    return false;
+  }
+  return true;
+}
+
+app.post('/manager/login', (req, res) => {
+  if (!process.env.MANAGER_PASSWORD) return res.status(503).json({ error: 'not configured' });
+  const supplied = String((req.body && req.body.password) || '');
+  const a = Buffer.from(crypto.createHash('sha256').update(supplied).digest('hex'));
+  const b = Buffer.from(managerPasswordHash());
+  if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) {
+    return res.status(401).json({ error: 'wrong password' });
+  }
+  res.setHeader('Set-Cookie', `${MANAGER_COOKIE}=${managerPasswordHash()}; Max-Age=31536000; Path=/manager; HttpOnly; SameSite=Lax`);
+  res.json({ ok: true });
+});
+
+app.get('/manager/data', async (req, res) => {
+  if (!requireManagerAuth(req, res)) return;
+  try {
+    managerRowsCache = null;
+    const rows = await fetchManagerRows();
+
+    // "Today" is judged in shop time, from the same locale-formatted
+    // timestamp logOrderToSheets writes ("8/27/26, 2:30 PM").
+    const todayPrefix = new Date().toLocaleString('en-US', {
+      timeZone: SHOP_HOURS.timezone, dateStyle: 'short', timeStyle: 'short',
+    }).split(',')[0];
+
+    let todayCount = 0, todayRevenue = 0, allRevenue = 0;
+    const orders = [];
+    for (const r of rows) {
+      const [orderNumber, timestamp, items, total, mode, language, phone, status] = r;
+      if (!orderNumber) continue;
+      const amount = parseFloat(String(total || '').replace(/[^0-9.]/g, '')) || 0;
+      const isToday = String(timestamp || '').startsWith(todayPrefix);
+      const st = (status || 'Confirmed').trim();
+      // Cancelled orders are shown in history but never counted as money.
+      if (st !== 'Cancelled') {
+        allRevenue += amount;
+        if (isToday) { todayCount++; todayRevenue += amount; }
+      }
+      orders.push({ orderNumber, timestamp, items, total: amount, mode, status: st, isToday });
+    }
+    orders.reverse();
+
+    const { topItems, peakHour } = await getOrderStats();
+    const soldOut = [];
+    MENU.forEach(cat => cat.items.forEach((item, i) => {
+      if (isItemSoldOut(cat.id, i + 1)) soldOut.push(`${item.name} (${cat.category})`);
+    }));
+
+    res.json({
+      todayCount,
+      todayRevenue: todayRevenue.toFixed(2),
+      allCount: orders.filter(o => o.status !== 'Cancelled').length,
+      allRevenue: allRevenue.toFixed(2),
+      avgOrder: orders.length ? (allRevenue / Math.max(1, orders.filter(o => o.status !== 'Cancelled').length)).toFixed(2) : '0.00',
+      topItems,
+      peakHour: peakHour === null ? null : formatHour12(peakHour),
+      soldOut,
+      customerCount: Object.keys(customerProfiles).length,
+      ordersPaused,
+      funnel: funnelCounters,
+      orders: orders.slice(0, 60),
+    });
+  } catch (err) {
+    console.error('Manager dashboard data failed:', err.message || err);
+    res.status(500).json({ error: 'could not load data' });
+  }
+});
+
+const MANAGER_HTML = `<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Manager — Créme De La Créme</title>
+<style>
+  :root { --bg:#f6f7f9; --card:#ffffff; --line:#dde1e8; --text:#11141a; --dim:#5b6373;
+          --good:#15803d; --warn:#c2740a; --bad:#dc2626; --accent:#1d4ed8;
+          --brand:#b4304f; --surface2:#eef0f4; --onAccent:#ffffff;
+          --shadow:0 1px 3px rgba(16,20,30,.10); --pillOn:#e7f6ec; --pillOff:#fdeaea; }
+  :root[data-theme="night"] { --bg:#12141a; --card:#1c1f28; --line:#2c3140; --text:#f2f4f8;
+          --dim:#98a0b3; --good:#22c55e; --warn:#ffb020; --bad:#ef4444; --accent:#3b82f6;
+          --brand:#ff8fa8; --surface2:#252a36; --onAccent:#04210f;
+          --shadow:none; --pillOn:#12301c; --pillOff:#3a2020; }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--text);
+         font:16px/1.5 system-ui,-apple-system,Segoe UI,Roboto,sans-serif;
+         -webkit-text-size-adjust:100%; }
+  h1 .brand { color:var(--brand); }
+  #theme { background:var(--card); color:var(--text); border:1px solid var(--line);
+           border-radius:8px; padding:7px 11px; font:inherit; font-size:14px;
+           font-weight:600; cursor:pointer; }
+  header { position:sticky; top:0; background:var(--bg); border-bottom:1px solid var(--line);
+           padding:14px 18px; display:flex; align-items:center; gap:12px; z-index:5; flex-wrap:wrap; }
+  h1 { font-size:19px; margin:0; font-weight:650; }
+  h2 { font-size:14px; margin:26px 0 10px; color:var(--dim); text-transform:uppercase; letter-spacing:.06em; }
+  .muted { color:var(--dim); font-size:13px; margin-left:auto; }
+  main { padding:16px; max-width:1100px; margin:0 auto; }
+  .tiles { display:grid; gap:12px; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); }
+  .tile { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:14px 16px; }
+  .tile .k { color:var(--dim); font-size:12px; text-transform:uppercase; letter-spacing:.05em; }
+  .tile .v { font-size:26px; font-weight:700; margin-top:4px; }
+  .tile .v.money::before { content:'$'; font-size:17px; opacity:.65; margin-right:1px; }
+  .pill { display:inline-block; font-size:12px; font-weight:700; padding:3px 9px; border-radius:999px; }
+  .pill.on { background:var(--pillOn); color:var(--good); }
+  .pill.off { background:var(--pillOff); color:#ffc9c9; }
+  table { width:100%; border-collapse:collapse; font-size:14px; }
+  .scroll { overflow-x:auto; border:1px solid var(--line); border-radius:12px; background:var(--card); }
+  th,td { text-align:left; padding:9px 12px; border-bottom:1px solid var(--line); white-space:nowrap; }
+  th { color:var(--dim); font-size:12px; text-transform:uppercase; letter-spacing:.05em; }
+  tr:last-child td { border-bottom:none; }
+  td.items { white-space:normal; min-width:230px; color:var(--dim); }
+  .st { font-size:12px; font-weight:700; padding:2px 8px; border-radius:999px; background:var(--surface2); }
+  .st.Confirmed { color:var(--warn); } .st.Preparing { color:var(--accent); }
+  .st[class*='Ready'], .st[class*='Out'] { color:var(--good); }
+  .st.Completed { color:var(--dim); } .st.Cancelled { color:var(--bad); }
+  ul.plain { list-style:none; padding:0; margin:0; }
+  ul.plain li { background:var(--card); border:1px solid var(--line); border-radius:8px;
+                padding:9px 12px; margin-bottom:7px; font-size:14px; }
+  .empty { color:var(--dim); font-size:14px; }
+  .tabs { display:flex; gap:6px; }
+  .tab { font:inherit; font-size:14px; font-weight:600; padding:7px 13px; border-radius:8px;
+         border:1px solid var(--line); background:var(--surface2); color:var(--dim); cursor:pointer; }
+  .tab.on { background:var(--accent); border-color:transparent; color:#fff; }
+  .ghost { font:inherit; font-size:13px; font-weight:600; padding:6px 12px; border-radius:8px;
+           border:1px solid var(--line); background:var(--surface2); color:var(--text); cursor:pointer; }
+  .cat { margin-bottom:18px; }
+  .cat h3 { font-size:15px; margin:0 0 8px; }
+  .row { display:flex; align-items:center; gap:10px; background:var(--card); border:1px solid var(--line);
+         border-radius:9px; padding:9px 12px; margin-bottom:6px; flex-wrap:wrap; }
+  .row.out { opacity:.55; }
+  .row .nm { flex:1; min-width:130px; font-size:14px; }
+  .row input { width:74px; font:inherit; font-size:14px; padding:6px 8px; border-radius:7px;
+               border:1px solid var(--line); background:var(--bg); color:var(--text); }
+  .row .lbl { font-size:11px; color:var(--dim); }
+  .row button { font:inherit; font-size:13px; font-weight:600; padding:7px 11px; border-radius:7px;
+                border:1px solid var(--line); background:var(--surface2); color:var(--text); cursor:pointer; }
+  .row button.save { background:var(--good); color:var(--onAccent); border-color:transparent; }
+  .row button.out { background:var(--pillOff); color:#ffc9c9; border-color:#5a2b2b; }
+  #login { max-width:340px; margin:16vh auto; padding:26px; background:var(--card);
+           border:1px solid var(--line); border-radius:12px; }
+  #login input { width:100%; font:inherit; padding:12px; margin:12px 0; border-radius:8px;
+                 border:1px solid var(--line); background:var(--bg); color:var(--text); }
+  #login button { width:100%; font:inherit; font-weight:600; padding:11px; border:none;
+                  border-radius:8px; background:var(--good); color:var(--onAccent); cursor:pointer; }
+  .err { color:#ff9b9b; font-size:14px; min-height:20px; }
+
+  /* Tablet and phone. The header holds a title, a status pill, a
+     pause button, four tabs and a timestamp, so it must wrap; the tab strip
+     scrolls sideways rather than stacking into a tall block. */
+  @media (max-width:820px){
+    header { flex-wrap:wrap; gap:9px; padding:11px 13px; }
+    h1 { font-size:17px; }
+    .muted { margin-left:0; width:100%; }
+    .tabs { width:100%; overflow-x:auto; padding-bottom:2px; -webkit-overflow-scrolling:touch; }
+    .tab { flex:0 0 auto; }
+    main { padding:12px; }
+    h2 { margin:20px 0 9px; }
+    .tile .v { font-size:23px; }
+    /* Menu editor: name on its own line, then the price fields and actions
+       below it, so nothing gets squeezed to an unusable width. */
+    .row { gap:8px; }
+    .row .nm { flex:1 1 100%; min-width:0; }
+    .row input { width:80px; font-size:16px; }  /* 16px stops iOS zooming on focus */
+    .row button { flex:1 1 auto; padding:9px 12px; }
+  }
+  @media (max-width:440px){
+    .tiles { grid-template-columns:repeat(auto-fit,minmax(min(140px,100%),1fr)); }
+  }
+</style>
+</head>
+<body>
+<div id="login" hidden>
+  <h1>Manager Login</h1>
+  <input type="password" id="pw" placeholder="Password" autocomplete="current-password">
+  <button onclick="login()">Enter</button>
+  <div class="err" id="loginErr"></div>
+</div>
+
+<div id="app" hidden>
+  <header>
+    <h1><span class="brand">🍧 Créme</span> · Manager</h1>
+    <span id="paused"></span>
+    <button class="ghost" id="pauseBtn" onclick="togglePause()">—</button>
+    <button id="theme" onclick="toggleTheme()">🌙 Night</button>
+    <span class="tabs">
+      <button class="tab on" data-tab="overview" onclick="showTab('overview')">Overview</button>
+      <button class="tab" data-tab="menu" onclick="showTab('menu')">Menu</button>
+      <button class="tab" data-tab="live" onclick="showTab('live')">Live</button>
+      <button class="tab" data-tab="customers" onclick="showTab('customers')">Customers</button>
+    </span>
+    <span class="muted" id="updated">—</span>
+  </header>
+  <main>
+    <section id="tab-overview">
+      <div class="tiles" id="tiles"></div>
+      <h2>Top items</h2><ul class="plain" id="top"></ul>
+      <h2>Sold out now</h2><ul class="plain" id="soldout"></ul>
+      <h2>Recent orders</h2><div class="scroll"><table>
+        <thead><tr><th>#</th><th>When</th><th>Items</th><th>Total</th><th>Type</th><th>Status</th></tr></thead>
+        <tbody id="rows"></tbody></table></div>
+    </section>
+
+    <section id="tab-menu" hidden>
+      <h2>Menu — tap to edit price or mark sold out</h2>
+      <div id="menu"></div>
+    </section>
+
+    <section id="tab-live" hidden>
+      <h2>Customers talking to the bot right now</h2>
+      <div id="live"></div>
+    </section>
+
+    <section id="tab-customers" hidden>
+      <h2>Saved customers</h2>
+      <div class="scroll"><table>
+        <thead><tr><th>Phone</th><th>Saved address</th><th>Notes</th><th>Updated</th></tr></thead>
+        <tbody id="custRows"></tbody></table></div>
+    </section>
+  </main>
+</div>
+
+<script>
+function esc(s){ return String(s==null?'':s).replace(/[&<>"']/g,function(c){
+  return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];}); }
+
+function login(){
+  fetch('/manager/login',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({password:document.getElementById('pw').value})})
+   .then(function(r){ return r.ok?load():r.json().then(function(j){throw new Error(j.error||'failed');}); })
+   .catch(function(e){ document.getElementById('loginErr').textContent=e.message; });
+}
+
+function tile(k,v,money){ return '<div class="tile"><div class="k">'+esc(k)+
+  '</div><div class="v'+(money?' money':'')+'">'+esc(v)+'</div></div>'; }
+
+function load(){
+  return fetch('/manager/data').then(function(r){
+    if(r.status===401){ document.getElementById('login').hidden=false;
+      document.getElementById('app').hidden=true; throw new Error('auth'); }
+    return r.json();
+  }).then(function(d){
+    document.getElementById('login').hidden=true;
+    document.getElementById('app').hidden=false;
+    document.getElementById('updated').textContent='updated '+new Date().toLocaleTimeString();
+    paused = d.ordersPaused; renderPause();
+
+    document.getElementById('tiles').innerHTML =
+      tile("Today's orders", d.todayCount) +
+      tile("Today's sales", d.todayRevenue, true) +
+      tile('All-time orders', d.allCount) +
+      tile('All-time sales', d.allRevenue, true) +
+      tile('Average order', d.avgOrder, true) +
+      tile('Busiest hour', d.peakHour || '—') +
+      tile('Saved customers', d.customerCount) +
+      tile('Carts abandoned', d.funnel.cartAbandoned);
+
+    document.getElementById('top').innerHTML = (d.topItems||[]).length
+      ? d.topItems.map(function(p,i){ return '<li>'+(i+1)+'. '+esc(p[0])+
+          ' <span style="color:var(--dim)">— '+p[1]+' orders</span></li>'; }).join('')
+      : '<li class="empty">No orders yet.</li>';
+
+    document.getElementById('soldout').innerHTML = (d.soldOut||[]).length
+      ? d.soldOut.map(function(s){ return '<li>❌ '+esc(s)+'</li>'; }).join('')
+      : '<li class="empty">Everything is in stock.</li>';
+
+    document.getElementById('rows').innerHTML = (d.orders||[]).map(function(o){
+      return '<tr><td><strong>#'+esc(o.orderNumber)+'</strong></td><td>'+esc(o.timestamp)+
+        '</td><td class="items">'+esc(o.items)+'</td><td>$'+o.total.toFixed(2)+
+        '</td><td>'+esc(String(o.mode||'').split(' - ')[0])+
+        '</td><td><span class="st '+esc(o.status.replace(/\\s+/g,''))+'">'+esc(o.status)+
+        '</span></td></tr>';
+    }).join('') || '<tr><td colspan="6" class="empty">No orders yet.</td></tr>';
+  }).catch(function(e){ if(e.message!=='auth') console.error(e); });
+}
+
+var currentTab='overview', paused=false;
+
+function applyTheme(t){
+  if(t==='night') document.documentElement.setAttribute('data-theme','night');
+  else document.documentElement.removeAttribute('data-theme');
+  var b=document.getElementById('theme');
+  if(b) b.textContent = t==='night' ? '☀️ Day' : '🌙 Night';
+}
+function toggleTheme(){
+  var next = document.documentElement.getAttribute('data-theme')==='night' ? 'day' : 'night';
+  try { localStorage.setItem('managerTheme', next); } catch(e){}
+  applyTheme(next);
+}
+try { applyTheme(localStorage.getItem('managerTheme') || 'day'); } catch(e){ applyTheme('day'); }
+
+function showTab(t){
+  currentTab=t;
+  ['overview','menu','live','customers'].forEach(function(x){
+    document.getElementById('tab-'+x).hidden = (x!==t);
+  });
+  document.querySelectorAll('.tab').forEach(function(b){
+    b.classList.toggle('on', b.getAttribute('data-tab')===t);
+  });
+  if(t==='menu') loadMenu();
+  if(t==='live') loadLive();
+  if(t==='customers') loadCustomers();
+}
+
+function loadLive(){
+  fetch('/manager/live').then(function(r){return r.json();}).then(function(d){
+    var el=document.getElementById('live');
+    if(!(d.live||[]).length){
+      el.innerHTML='<div class="empty">Nobody is mid-conversation right now.'+
+        (d.savedCarts?' ('+d.savedCarts+' saved cart(s) waiting to resume.)':'')+'</div>';
+      return;
+    }
+    el.innerHTML=d.live.map(function(s){
+      var flag = s.escalation>=3 ? '<span class="pill off">ESCALATED</span>'
+               : s.frustration>=3 ? '<span class="pill off">FRUSTRATED</span>'
+               : s.parseFailures>=2 ? '<span class="pill off">STUCK</span>' : '';
+      var idle = s.idleSeconds<60 ? s.idleSeconds+'s' : Math.round(s.idleSeconds/60)+'m';
+      var convo = (s.recent||[]).map(function(t){
+        return '<div class="lbl" style="margin:2px 0"><strong>'+(t.role==='customer'?'👤':'🤖')+'</strong> '+
+          esc(String(t.text||'').slice(0,110))+'</div>';
+      }).join('');
+      return '<div class="row" style="display:block">'+
+        '<div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">'+
+          '<strong>'+esc(s.phone)+'</strong> '+flag+
+          '<span class="lbl">step: '+esc(s.step)+' · '+esc(s.language)+' · idle '+idle+
+          (s.cartLines?' · cart '+s.cartLines+' item(s) $'+esc(s.cartTotal):'')+
+          (s.pendingResume?' · awaiting resume':'')+'</span>'+
+        '</div>'+(convo?'<div style="margin-top:8px">'+convo+'</div>':'')+
+      '</div>';
+    }).join('');
+  }).catch(function(e){ console.error(e); });
+}
+
+function togglePause(){
+  fetch('/manager/pause',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({paused:!paused})})
+   .then(function(r){return r.json();})
+   .then(function(j){ paused=j.ordersPaused; renderPause(); })
+   .catch(function(e){ alert(e.message); });
+}
+
+function renderPause(){
+  document.getElementById('paused').innerHTML = paused
+    ? '<span class="pill off">ORDERS PAUSED</span>' : '<span class="pill on">TAKING ORDERS</span>';
+  document.getElementById('pauseBtn').textContent = paused ? 'Resume orders' : 'Pause orders';
+}
+
+function saveItem(catId, idx, body, btn, label){
+  btn.disabled=true; var old=btn.textContent; btn.textContent='…';
+  body.categoryId=catId; body.itemIndex=idx;
+  fetch('/manager/item',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify(body)})
+   .then(function(r){ return r.json().then(function(j){ if(!r.ok) throw new Error(j.error||'failed'); }); })
+   .then(function(){ btn.textContent=label||'Saved ✓'; setTimeout(function(){ loadMenu(); },700); })
+   .catch(function(e){ alert(e.message); btn.textContent=old; btn.disabled=false; });
+}
+
+function loadMenu(){
+  fetch('/manager/menu').then(function(r){return r.json();}).then(function(d){
+    document.getElementById('menu').innerHTML = (d.categories||[]).map(function(c){
+      return '<div class="cat"><h3>'+esc(c.category)+'</h3>'+c.items.map(function(it){
+        var id='f_'+c.id+'_'+it.itemIndex;
+        return '<div class="row'+(it.soldOut?' out':'')+'">'+
+          '<span class="nm">'+esc(it.name)+(it.soldOut?' <span class="lbl">— SOLD OUT</span>':'')+'</span>'+
+          '<span class="lbl">'+(it.sized?'Reg':'Price')+'</span>'+
+          '<input id="'+id+'_p" type="number" step="0.25" min="0" value="'+it.price+'">'+
+          (it.sized?'<span class="lbl">Lg</span><input id="'+id+'_l" type="number" step="0.25" min="0" value="'+(it.largePrice||'')+'">':'')+
+          '<button class="save" onclick="savePrice(\\''+c.id+'\\','+it.itemIndex+',\\''+id+'\\','+it.sized+',this)">Save</button>'+
+          '<button class="'+(it.soldOut?'':'out')+'" onclick="saveItem(\\''+c.id+'\\','+it.itemIndex+',{available:'+(it.soldOut?'true':'false')+'},this)">'+
+            (it.soldOut?'Back in stock':'Sold out')+'</button>'+
+        '</div>';
+      }).join('')+'</div>';
+    }).join('') || '<div class="empty">No menu loaded.</div>';
+  }).catch(function(e){ console.error(e); });
+}
+
+function savePrice(catId, idx, fieldId, sized, btn){
+  var body={ price: document.getElementById(fieldId+'_p').value };
+  if(sized){ var l=document.getElementById(fieldId+'_l'); if(l && l.value) body.largePrice=l.value; }
+  saveItem(catId, idx, body, btn);
+}
+
+function loadCustomers(){
+  fetch('/manager/customers').then(function(r){return r.json();}).then(function(d){
+    document.getElementById('custRows').innerHTML = (d.customers||[]).map(function(c){
+      return '<tr><td>'+esc(c.phone)+'</td><td class="items">'+esc(c.savedAddress)+
+        '</td><td class="items">'+esc(c.notes)+'</td><td>'+esc(c.updatedAt)+'</td></tr>';
+    }).join('') || '<tr><td colspan="4" class="empty">No saved customers yet.</td></tr>';
+  }).catch(function(e){ console.error(e); });
+}
+
+load();
+setInterval(function(){
+  if(currentTab==='overview') load();
+  if(currentTab==='live') loadLive();   // live view is only useful if it's actually live
+}, 15000);
+document.getElementById('pw').addEventListener('keydown',function(e){ if(e.key==='Enter') login(); });
+</script>
+</body>
+</html>`;
+
+// Full menu with live availability + prices, for the Menu tab.
+app.get('/manager/menu', (req, res) => {
+  if (!requireManagerAuth(req, res)) return;
+  const categories = MENU.map(cat => ({
+    id: cat.id,
+    category: cat.category,
+    items: cat.items.map((item, i) => ({
+      itemIndex: i + 1,
+      name: item.name,
+      price: item.sizes ? item.sizes[0].price : item.price,
+      largePrice: item.sizes && item.sizes[1] ? item.sizes[1].price : null,
+      sized: Boolean(item.sizes),
+      soldOut: isItemSoldOut(cat.id, i + 1),
+    })),
+  }));
+  res.json({ categories });
+});
+
+// Who is talking to the bot RIGHT NOW. This data lives only in memory —
+// it's in no sheet and nowhere else visible — so a stuck or frustrated
+// customer is otherwise invisible until they give up. Manager auth: it
+// exposes live conversation transcripts.
+app.get('/manager/live', (req, res) => {
+  if (!requireManagerAuth(req, res)) return;
+  const now = Date.now();
+  const live = Object.entries(sessions).map(([phone, s]) => ({
+    phone,
+    step: s.step,
+    language: s.language || '—',
+    cartLines: s.cart.length,
+    cartTotal: cartTotal(s.cart).toFixed(2),
+    idleSeconds: Math.round((now - (s.lastMessageAt || now)) / 1000),
+    frustration: s.frustrationScore || 0,
+    escalation: s.escalationStage || 0,
+    parseFailures: s.parseFailureStreak || 0,
+    pendingResume: Boolean(s.pendingResume),
+    // Last few turns only — enough to see what they're stuck on without
+    // dumping a whole conversation into the page.
+    recent: (s.transcript || []).slice(-6),
+  }));
+  // Most likely to need help first: escalated, then frustrated, then stuck.
+  live.sort((a, b) =>
+    (b.escalation - a.escalation) ||
+    (b.frustration - a.frustration) ||
+    (b.parseFailures - a.parseFailures) ||
+    (a.idleSeconds - b.idleSeconds));
+  res.json({ live, savedCarts: Object.keys(savedCarts).length });
+});
+
+app.get('/manager/customers', (req, res) => {
+  if (!requireManagerAuth(req, res)) return;
+  const customers = Object.entries(customerProfiles).map(([phone, p]) => ({
+    phone,
+    savedAddress: p.savedAddress || '',
+    notes: p.notes || '',
+    updatedAt: p.updatedAt || '',
+  }));
+  res.json({ customers });
+});
+
+app.post('/manager/pause', (req, res) => {
+  if (!requireManagerAuth(req, res)) return;
+  ordersPaused = Boolean(req.body && req.body.paused);
+  console.log(`Manager dashboard: orders ${ordersPaused ? 'PAUSED' : 'resumed'}`);
+  res.json({ ok: true, ordersPaused });
+});
+
+// One endpoint for availability, price and name — they all land in the same
+// Availability row, and doing them together keeps the sheet write count down.
+app.post('/manager/item', async (req, res) => {
+  if (!requireManagerAuth(req, res)) return;
+  const { categoryId, itemIndex, available, price, largePrice, name } = req.body || {};
+  const cat = MENU.find(c => c.id === String(categoryId));
+  const item = cat && cat.items[Number(itemIndex) - 1];
+  if (!item) return res.status(400).json({ error: 'unknown item' });
+
+  // Reject rather than silently coerce — a mistyped price here changes what
+  // real customers are charged.
+  const p = price === undefined || price === null || price === '' ? null : Number(price);
+  const lp = largePrice === undefined || largePrice === null || largePrice === '' ? null : Number(largePrice);
+  if (p !== null && (!Number.isFinite(p) || p <= 0)) return res.status(400).json({ error: 'price must be a positive number' });
+  if (lp !== null && (!Number.isFinite(lp) || lp <= 0)) return res.status(400).json({ error: 'large price must be a positive number' });
+  const newName = typeof name === 'string' && name.trim() ? name.trim().slice(0, 60) : null;
+
+  try {
+    if (typeof available === 'boolean') {
+      await setItemAvailability(String(categoryId), Number(itemIndex), available);
+    }
+    if (p !== null || lp !== null || newName) {
+      await updateMenuItemFields(String(categoryId), Number(itemIndex), {
+        name: newName, price: p, largePrice: lp,
+      });
+    }
+    console.log(`Manager dashboard: updated ${categoryId}.${itemIndex}`);
+    res.json({ ok: true });
+  } catch (err) {
+    console.error('Manager item update failed:', err.message || err);
+    res.status(500).json({ error: err.message || 'could not update item' });
+  }
+});
+
+app.get('/manager', (req, res) => {
+  if (!process.env.MANAGER_PASSWORD) {
+    return res.status(503).send('Manager dashboard is not configured — set MANAGER_PASSWORD in the environment.');
+  }
+  res.type('html').send(MANAGER_HTML);
+});
 
 app.get('/kitchen', (req, res) => {
   if (!process.env.KITCHEN_PASSWORD) {
@@ -4754,4 +6323,4 @@ if (require.main === module) {
 
 // For the replay-test harness (test/replay.test.js) only — production never
 // requires this file as a module, so these exports are inert otherwise.
-module.exports = { app, processWhatsAppMessage, isItemSoldOut, itemAt, interpretMessage, dryRunSent, sessions, lastOrders, savedCarts, cartTotal, OWNER_NUMBERS, DRIVER_NUMBERS, soldOutIds, sweepIdleSessions, replySummaryText, MENU, applyMenuSheetRows, resetMenuSheetTrackingForTests, notifyStatusChange };
+module.exports = { app, processWhatsAppMessage, isItemSoldOut, itemAt, interpretMessage, dryRunSent, sessions, lastOrders, savedCarts, cartTotal, OWNER_NUMBERS, DRIVER_NUMBERS, soldOutIds, sweepIdleSessions, replySummaryText, MENU, applyMenuSheetRows, resetMenuSheetTrackingForTests, notifyStatusChange, dryRunSheetRows, dryRunSheetWrites };

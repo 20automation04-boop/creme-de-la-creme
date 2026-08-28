@@ -29,11 +29,16 @@
     },
     {
       "in": "123 Main Street near the blue house, past the big mango tree, second gate on the left, 123 Main Street near the blue house, past the big mango tree, second gate on the left, 123 Main Street near the blue house, past the big mango tree, second gate on the left, 123 Main Street near the blue house, past the big mango tree, second gate on the left, END",
-      "expectStep": "confirm",
+      "expectStep": "deliveryNote",
       "expectFieldAtMost": [
         "address.length",
         300
       ]
+    },
+    {
+      "comment": "skip the landmark step; the cap above is what this fixture guards",
+      "buttonId": "skip",
+      "expectStep": "confirm"
     }
   ]
 }

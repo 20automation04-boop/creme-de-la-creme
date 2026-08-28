@@ -32,6 +32,11 @@
     },
     {
       "in": "123 Calle Principal",
+      "expectStep": "deliveryNote"
+    },
+    {
+      "comment": "optional landmark step — a typed note reaches the driver",
+      "in": "portón azul junto a la iglesia",
       "expectStep": "confirm"
     },
     {
