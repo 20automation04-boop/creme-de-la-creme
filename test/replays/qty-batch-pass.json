@@ -1,0 +1,17 @@
+{
+  "name": "tap-several-items-then-answer-quantities-in-one-pass",
+  "from": "19990000034",
+  "turns": [
+    { "in": "1", "expectStep": "menu" },
+    { "in": "1", "expectStep": "item" },
+    { "comment": "each tap adds one immediately and leaves the list up — no quantity prompt interrupting selection", "in": "1", "expectStep": "item", "expectCartLength": 1, "expectReplyContains": "Added" },
+    { "in": "3", "expectStep": "item", "expectCartLength": 2 },
+    { "in": "5", "expectStep": "item", "expectCartLength": 3 },
+    { "comment": "finished selecting — now one question per item", "in": "done", "expectStep": "qtybatch" },
+    { "comment": "answered by button", "buttonId": "qty:2", "expectStep": "qtybatch" },
+    { "comment": "answered by typing, carrying a note in the same reply", "in": "1 no ice", "expectStep": "qtybatch" },
+    { "comment": "last answer completes the pass and hands off to pickup/delivery", "in": "3", "expectStep": "mode", "expectCartLength": 3, "expectCartTotal": 42, "expectReplyContains": "no ice" },
+    { "in": "pickup", "expectStep": "confirm" },
+    { "in": "yes", "expectStep": "menu", "expectReplyContains": "confirmed!" }
+  ]
+}

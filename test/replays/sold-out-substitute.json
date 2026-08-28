@@ -2,9 +2,27 @@
   "name": "sold-out-item-offers-substitute",
   "from": "19990000008",
   "turns": [
-    { "in": "1", "expectStep": "menu" },
-    { "markSoldOut": ["1.1"], "in": "1", "expectStep": "item" },
-    { "in": "1", "expectStep": "item", "expectCartLength": 0, "expectReplyContains": "sold out" },
-    { "in": "2", "expectStep": "quantity", "expectCartLength": 0 }
+    {
+      "in": "1",
+      "expectStep": "menu"
+    },
+    {
+      "markSoldOut": [
+        "1.1"
+      ],
+      "in": "1",
+      "expectStep": "item"
+    },
+    {
+      "in": "1",
+      "expectStep": "item",
+      "expectCartLength": 0,
+      "expectReplyContains": "sold out"
+    },
+    {
+      "in": "2",
+      "expectStep": "item",
+      "expectCartLength": 1
+    }
   ]
 }

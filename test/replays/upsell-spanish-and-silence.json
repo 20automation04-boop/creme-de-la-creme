@@ -2,17 +2,49 @@
   "name": "add-on-offered-in-spanish-then-stays-quiet-once-cart-has-both",
   "from": "19990000033",
   "turns": [
-    { "in": "2", "expectStep": "menu" },
-    { "in": "1", "expectStep": "item" },
-    { "in": "1", "expectStep": "quantity" },
-    { "in": "1", "expectStep": "notes" },
-    { "in": "0", "expectStep": "item", "expectCartLength": 1 },
-    { "in": "listo", "expectStep": "mode", "expectReplyContains": "$2.50 si quieres" },
-    { "in": "atrás", "expectStep": "menu" },
-    { "in": "11", "expectStep": "item" },
-    { "in": "1", "expectStep": "quantity" },
-    { "in": "1", "expectStep": "notes" },
-    { "in": "0", "expectStep": "item", "expectCartLength": 2 },
-    { "in": "listo", "expectStep": "mode", "expectReplyNotContains": "combina bien" }
+    {
+      "in": "2",
+      "expectStep": "menu"
+    },
+    {
+      "in": "1",
+      "expectStep": "item"
+    },
+    {
+      "in": "1",
+      "expectStep": "item",
+      "expectCartLength": 1
+    },
+    {
+      "in": "listo",
+      "expectStep": "qtybatch"
+    },
+    {
+      "in": "1",
+      "expectStep": "mode",
+      "expectReplyContains": "$2.50 si quieres"
+    },
+    {
+      "in": "atrás",
+      "expectStep": "menu"
+    },
+    {
+      "in": "11",
+      "expectStep": "item"
+    },
+    {
+      "in": "1",
+      "expectStep": "item",
+      "expectCartLength": 2
+    },
+    {
+      "in": "listo",
+      "expectStep": "qtybatch"
+    },
+    {
+      "in": "1",
+      "expectStep": "mode",
+      "expectReplyNotContains": "combina bien"
+    }
   ]
 }

@@ -2,21 +2,48 @@
   "name": "stale-button-tap-never-becomes-note-or-address-text",
   "from": "19990000026",
   "turns": [
-    { "in": "1", "expectStep": "menu" },
-    { "in": "1", "expectStep": "item" },
-    { "in": "1", "expectStep": "quantity" },
-
-    { "buttonId": "done", "expectStep": "quantity" },
-
-    { "in": "2", "expectStep": "notes" },
-    { "buttonId": "done", "expectStep": "notes", "expectCartLength": 0 },
-    { "buttonId": "none", "expectStep": "item", "expectCartLength": 1 },
-
-    { "in": "done", "expectStep": "mode" },
-    { "buttonId": "delivery", "expectStep": "address" },
-    { "buttonId": "done", "expectStep": "address" },
-    { "buttonId": "none", "expectStep": "address" },
-
-    { "in": "123 Real Street", "expectStep": "confirm" }
+    {
+      "in": "1",
+      "expectStep": "menu"
+    },
+    {
+      "in": "1",
+      "expectStep": "item"
+    },
+    {
+      "in": "1",
+      "expectStep": "item",
+      "expectCartLength": 1
+    },
+    {
+      "in": "done",
+      "expectStep": "qtybatch"
+    },
+    {
+      "buttonId": "pickup",
+      "expectStep": "qtybatch"
+    },
+    {
+      "in": "2",
+      "expectStep": "mode",
+      "expectCartLength": 1,
+      "expectReplyNotContains": "[pickup]"
+    },
+    {
+      "buttonId": "delivery",
+      "expectStep": "address"
+    },
+    {
+      "buttonId": "done",
+      "expectStep": "address"
+    },
+    {
+      "buttonId": "none",
+      "expectStep": "address"
+    },
+    {
+      "in": "123 Real Street",
+      "expectStep": "confirm"
+    }
   ]
 }

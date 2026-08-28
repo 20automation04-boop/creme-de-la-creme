@@ -2,14 +2,43 @@
   "name": "back-navigation-through-size-and-item",
   "from": "19990000004",
   "turns": [
-    { "in": "1", "expectStep": "menu" },
-    { "in": "6", "expectStep": "item" },
-    { "in": "1", "expectStep": "size" },
-    { "in": "0", "expectStep": "item" },
-    { "in": "0", "expectStep": "menu" },
-    { "in": "6", "expectStep": "item" },
-    { "in": "1", "expectStep": "size" },
-    { "in": "1", "expectStep": "quantity" },
-    { "in": "0", "expectStep": "item", "expectCartLength": 0 }
+    {
+      "in": "1",
+      "expectStep": "menu"
+    },
+    {
+      "in": "6",
+      "expectStep": "item"
+    },
+    {
+      "in": "1",
+      "expectStep": "size"
+    },
+    {
+      "in": "0",
+      "expectStep": "item"
+    },
+    {
+      "in": "0",
+      "expectStep": "menu"
+    },
+    {
+      "in": "6",
+      "expectStep": "item"
+    },
+    {
+      "in": "1",
+      "expectStep": "size"
+    },
+    {
+      "in": "0",
+      "expectStep": "item",
+      "expectCartLength": 0
+    },
+    {
+      "in": "0",
+      "expectStep": "menu",
+      "expectCartLength": 0
+    }
   ]
 }

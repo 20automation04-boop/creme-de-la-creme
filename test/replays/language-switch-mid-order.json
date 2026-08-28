@@ -2,14 +2,42 @@
   "name": "language-switch-preserves-cart",
   "from": "19990000003",
   "turns": [
-    { "in": "1", "expectStep": "menu" },
-    { "in": "1", "expectStep": "item" },
-    { "in": "1", "expectStep": "quantity" },
-    { "in": "1", "expectStep": "notes" },
-    { "in": "0", "expectStep": "item", "expectCartLength": 1, "expectCartTotal": 7 },
-    { "in": "language", "expectStep": "language", "expectCartLength": 1 },
-    { "in": "2", "expectStep": "menu", "expectCartLength": 1 },
-    { "in": "listo", "expectStep": "mode", "expectCartLength": 1 },
-    { "in": "recoger", "expectStep": "confirm" }
+    {
+      "in": "1",
+      "expectStep": "menu"
+    },
+    {
+      "in": "1",
+      "expectStep": "item"
+    },
+    {
+      "in": "1",
+      "expectStep": "item",
+      "expectCartLength": 1,
+      "expectCartTotal": 7
+    },
+    {
+      "in": "language",
+      "expectStep": "language",
+      "expectCartLength": 1
+    },
+    {
+      "in": "2",
+      "expectStep": "menu",
+      "expectCartLength": 1
+    },
+    {
+      "in": "listo",
+      "expectStep": "qtybatch",
+      "expectCartLength": 1
+    },
+    {
+      "in": "1",
+      "expectStep": "mode"
+    },
+    {
+      "in": "recoger",
+      "expectStep": "confirm"
+    }
   ]
 }

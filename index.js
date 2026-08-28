@@ -1442,6 +1442,9 @@ Need help? Type *help* anytime.`,
     qtyRange: (max) => `Just need a number between 1 and ${max} there.`,
     added: (lines, total) => `Added ✅\n${lines}\nCart total: $${total}`,
     askQty: (name, price, max) => `${name} - $${price}\nHow many would you like? (1-${max}, or 0 to go back)`,
+    addedOne: (name) => `Added ✅ ${name}`,
+    qtyBatchIntro: 'Nice pick! Just need amounts — one sec 👇',
+    askQtyBatch: (name, price) => `*${name}* — $${price} each\nHow many? Tap below, or type something like *2 no onions*.`,
     invalidQty: (max) => `That doesn't look like a valid quantity — try a number between 1 and ${max}.`,
     askSize: (name, sizes) => `${name} — choose a size:\n${sizes.map(s => `${s.key}. ${s.label} - $${s.price.toFixed(2)}`).join('\n')}\n\n0. Back`,
     invalidSize: 'Can you double check that size number and try again?',
@@ -1541,6 +1544,9 @@ Need help? Type *help* anytime.`,
     qtyRange: (max) => `Necesito un número entre 1 y ${max} para eso.`,
     added: (lines, total) => `Añadido ✅\n${lines}\nTotal del carrito: $${total}`,
     askQty: (name, price, max) => `${name} - $${price}\n¿Cuántos quieres? (1-${max}, o 0 para volver)`,
+    addedOne: (name) => `Añadido ✅ ${name}`,
+    qtyBatchIntro: '¡Buena elección! Solo faltan las cantidades 👇',
+    askQtyBatch: (name, price) => `*${name}* — $${price} c/u\n¿Cuántos? Toca abajo, o escribe algo como *2 sin cebolla*.`,
     invalidQty: (max) => `Esa cantidad no es válida — intenta un número entre 1 y ${max}.`,
     askSize: (name, sizes) => `${name} — elige un tamaño:\n${sizes.map(s => `${s.key}. ${s.label} - $${s.price.toFixed(2)}`).join('\n')}\n\n0. Volver`,
     invalidSize: '¿Puedes revisar el número de tamaño e intentar de nuevo?',
@@ -1649,6 +1655,7 @@ function newSession() {
     transcript: [], // { role: 'customer'|'bot', text } — capped, attached on human handoff
     duplicateWarningAcked: false, // see the duplicate-order soft-warning at 'confirm'
     upsellOffered: false, // the add-on suggestion is offered at most ONCE per order — see pickUpsell()
+    qtyIndex: null, // cart line currently being asked about during the 'qtybatch' pass
   };
 }
 
@@ -1868,10 +1875,18 @@ function escalateToHuman(from, session, lang, reasonLine) {
 // silently stop growing the cart past the cap, which is a safe default —
 // see the 'notes' step and applyMatchesToCart for the callers that DO
 // surface this to the customer.
-function addToCart(cart, name, price, qty, note = '', categoryId = null, itemIndex = null) {
+// qtyExplicit=false means the customer never stated a quantity — they tapped
+// the item and we assumed one. Those lines are the ones the qtybatch pass
+// asks about at checkout. Anything where they DID say a number (the "2x3"
+// shorthand, a typed order the AI parsed, a repeat, the add-on button) stays
+// explicit and is never re-asked.
+function addToCart(cart, name, price, qty, note = '', categoryId = null, itemIndex = null, qtyExplicit = true) {
   const existing = cart.find(c => c.name === name && c.price === price && (c.note || '') === note);
   if (existing) {
     existing.qty += qty;
+    // One implicit tap anywhere in the line makes the whole line askable —
+    // tapping something twice should still get a "how many?" it can override.
+    if (!qtyExplicit) existing.qtyExplicit = false;
     return true;
   }
   if (cart.length >= MAX_CART_LINES) return false;
@@ -1880,7 +1895,7 @@ function addToCart(cart, name, price, qty, note = '', categoryId = null, itemInd
   // lastOrders are both replayed later, after a refresh may have shifted
   // everything below a discontinued item.
   const source = (categoryId != null && itemIndex != null) ? itemAt(categoryId, itemIndex) : null;
-  cart.push({ name, price, qty, note, categoryId, itemIndex, sheetId: source ? source.sheetId : null });
+  cart.push({ name, price, qty, note, categoryId, itemIndex, sheetId: source ? source.sheetId : null, qtyExplicit });
   return true;
 }
 
@@ -3101,6 +3116,48 @@ app.post('/whatsapp', async (req, res) => {
   });
 });
 
+// Tap-to-add. Puts one of the item in the cart with no note and leaves the
+// customer on the same list so the next tap is immediate. Quantities used to
+// be asked on every single selection, which turned picking three things into
+// nine round trips; they're collected in one pass at checkout instead — see
+// the 'qtybatch' step.
+function addOneAndStay(session, lang, cat, item, itemIndex, size) {
+  const t = TXT[lang];
+  const name = size ? `${item.name} (${size.label})` : item.name;
+  const price = size ? size.price : item.price;
+  session.currentCategory = cat.id;
+  session.pendingItem = null;
+  session.pendingSize = null;
+  session.step = 'item';
+  if (!addToCart(session.cart, name, price, 1, '', cat.id, itemIndex, false)) {
+    return [t.cartFull, categoryItemsListMessage(cat, lang)];
+  }
+  return [t.addedOne(name), categoryItemsListMessage(cat, lang)];
+}
+
+// First cart line whose quantity the customer never actually stated.
+function nextImplicitQtyIndex(session, from = 0) {
+  for (let i = from; i < session.cart.length; i++) {
+    if (session.cart[i].qtyExplicit === false) return i;
+  }
+  return -1;
+}
+
+// One question per item. The buttons cover the common answers; typing is
+// what makes a note possible ("2 no onions") without a second prompt.
+function qtyBatchMessage(session, lang) {
+  const t = TXT[lang];
+  const line = session.cart[session.qtyIndex];
+  const body = t.askQtyBatch(line.name, line.price.toFixed(2));
+  return {
+    buttons: {
+      body,
+      buttons: [{ id: 'qty:1', title: '1' }, { id: 'qty:2', title: '2' }, { id: 'qty:3', title: '3' }],
+    },
+    fallback: body,
+  };
+}
+
 // Shared by the 'menu' and 'item' steps' "done"/checkout handling — the
 // only real difference between those two call sites was which view to fall
 // back to when the cart is empty. Returns the reply value for that branch;
@@ -3115,6 +3172,14 @@ function tryCheckout(session, lang, emptyCartFallbackViews) {
   }
   // Checkout proceeds even while closed — confirming becomes a pre-order
   // instead of a dead end (see the 'confirm' step's isPreorder handling).
+  // Anything they tapped rather than typed a number for gets asked about now,
+  // in one pass, instead of having interrupted each selection.
+  const pendingQty = nextImplicitQtyIndex(session);
+  if (pendingQty !== -1) {
+    session.qtyIndex = pendingQty;
+    session.step = 'qtybatch';
+    return [TXT[lang].qtyBatchIntro, qtyBatchMessage(session, lang)];
+  }
   session.step = 'mode';
   funnelCounters.checkoutStarted++;
   return [cartText(session.cart, lang), modeButtonsMessage(SHOP_INFO.deliveryFee, lang, takeUpsell(session))];
@@ -3538,8 +3603,7 @@ async function processWhatsAppMessage(message, res) {
             session.step = 'size';
             return sendReply(res, from, sizeButtonsMessage(item, lang, cat.id, itemIndex));
           }
-          session.step = 'quantity';
-          return sendReply(res, from, t.askQty(item.name, item.price.toFixed(2), MAX_QTY));
+          return sendReply(res, from, addOneAndStay(session, lang, cat, item, itemIndex, null));
         }
       } else if (sizeMatch) {
         const cat = MENU.find(c => c.id === sizeMatch[1]);
@@ -3555,9 +3619,7 @@ async function processWhatsAppMessage(message, res) {
           session.pendingItem = item;
           session.pendingCategoryId = cat.id;
           session.pendingItemIndex = itemIndex;
-          session.pendingSize = size;
-          session.step = 'quantity';
-          return sendReply(res, from, t.askQty(`${item.name} (${size.label})`, size.price.toFixed(2), MAX_QTY));
+          return sendReply(res, from, addOneAndStay(session, lang, cat, item, itemIndex, size));
         }
       }
     }
@@ -3718,8 +3780,7 @@ async function processWhatsAppMessage(message, res) {
             session.step = 'size';
             reply = sizeButtonsMessage(item, lang, cat.id, index + 1);
           } else {
-            session.step = 'quantity';
-            reply = t.askQty(item.name, item.price.toFixed(2), MAX_QTY);
+            reply = addOneAndStay(session, lang, cat, item, index + 1, null);
           }
         } else {
           // Not a valid item number — could be a question (hours, payment,
@@ -3777,9 +3838,7 @@ async function processWhatsAppMessage(message, res) {
             reply = [t.invalidSize, sizeButtonsMessage(item, lang, session.pendingCategoryId, session.pendingItemIndex)];
           }
         } else {
-          session.pendingSize = size;
-          session.step = 'quantity';
-          reply = t.askQty(`${item.name} (${size.label})`, size.price.toFixed(2), MAX_QTY);
+          reply = addOneAndStay(session, lang, cat, item, session.pendingItemIndex, size);
         }
         break;
       }
@@ -3955,6 +4014,83 @@ async function processWhatsAppMessage(message, res) {
             parseFailed = true;
             reply = t.askModeInvalid;
           }
+        }
+        break;
+      }
+
+      // One question per tapped item, asked once at the end rather than after
+      // every selection. A typed answer can carry a note too ("2 no onions"),
+      // which is why the note prompt could be dropped from the tap path
+      // without losing the ability to customise.
+      case 'qtybatch': {
+        const line = session.cart[session.qtyIndex];
+        if (!line) {
+          // Cart changed underneath this pass — do not guess, just re-enter
+          // checkout, which recomputes what still needs asking.
+          session.qtyIndex = null;
+          reply = tryCheckout(session, lang, categoryListMessages(lang));
+          break;
+        }
+
+        if (msg === '0' || msg === 'atras' || msg === 'atrás' || msg === 'back') {
+          session.qtyIndex = null;
+          session.step = 'menu';
+          reply = [cartText(session.cart, lang), ...categoryListMessages(lang)];
+          break;
+        }
+
+        const qtyButton = msg.match(/^qty:(\d+)$/);
+        // Same stale-tap guard as the notes/quantity steps: a button id from
+        // an earlier message is not an answer, and must never be stored as a
+        // note (that is how "Vanilla Bean [done]" reached a kitchen ticket).
+        if (message.type === 'interactive' && !qtyButton) {
+          reply = qtyBatchMessage(session, lang);
+          break;
+        }
+
+        let qty = null;
+        let note = '';
+        if (qtyButton) {
+          qty = parseInt(qtyButton[1], 10);
+        } else {
+          const typed = rawMsg.trim().match(/^(\d+)\s*(.*)$/s);
+          if (typed) {
+            qty = parseInt(typed[1], 10);
+            note = typed[2].trim();
+          } else {
+            // No number at all. Before assuming it is a customisation, check
+            // whether it is one of the questions customers actually ask mid-
+            // order — otherwise "what are the ways to pay" gets written onto
+            // the kitchen ticket as a special request. Same guard every other
+            // step in this file already applies.
+            const faqKey = matchFAQKeyword(msg);
+            if (faqKey) {
+              reply = [faqAnswer(faqKey, lang), qtyBatchMessage(session, lang)];
+              break;
+            }
+            // A genuine bare customisation, e.g. "no onions".
+            qty = 1;
+            note = rawMsg.trim();
+          }
+        }
+
+        if (!Number.isInteger(qty) || qty < 1 || qty > MAX_QTY) {
+          parseFailed = true;
+          reply = [t.qtyRange(MAX_QTY), qtyBatchMessage(session, lang)];
+          break;
+        }
+
+        line.qty = qty;
+        if (note) line.note = note.slice(0, 60);
+        line.qtyExplicit = true;
+
+        const nextLine = nextImplicitQtyIndex(session, session.qtyIndex + 1);
+        if (nextLine === -1) {
+          session.qtyIndex = null;
+          reply = tryCheckout(session, lang, categoryListMessages(lang));
+        } else {
+          session.qtyIndex = nextLine;
+          reply = qtyBatchMessage(session, lang);
         }
         break;
       }

@@ -2,13 +2,37 @@
   "name": "happy-path-pickup-flat-price",
   "from": "19990000001",
   "turns": [
-    { "in": "1", "expectStep": "menu" },
-    { "in": "1", "expectStep": "item" },
-    { "in": "2", "expectStep": "quantity" },
-    { "in": "3", "expectStep": "notes" },
-    { "in": "0", "expectStep": "item", "expectCartLength": 1, "expectCartTotal": 21, "expectReplyContains": "Added" },
-    { "in": "done", "expectStep": "mode" },
-    { "in": "pickup", "expectStep": "confirm" },
-    { "in": "yes", "expectStep": "menu", "expectReplyContains": "confirmed!" }
+    {
+      "in": "1",
+      "expectStep": "menu"
+    },
+    {
+      "in": "1",
+      "expectStep": "item"
+    },
+    {
+      "in": "2",
+      "expectStep": "item",
+      "expectCartLength": 1,
+      "expectReplyContains": "Added"
+    },
+    {
+      "in": "done",
+      "expectStep": "qtybatch"
+    },
+    {
+      "in": "3",
+      "expectStep": "mode",
+      "expectCartTotal": 21
+    },
+    {
+      "in": "pickup",
+      "expectStep": "confirm"
+    },
+    {
+      "in": "yes",
+      "expectStep": "menu",
+      "expectReplyContains": "confirmed!"
+    }
   ]
 }
