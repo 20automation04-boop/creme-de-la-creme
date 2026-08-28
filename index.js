@@ -1386,6 +1386,8 @@ Need help? Type *help* anytime.`,
     cartEmptyCheckout: "Cart's empty — pick something first!",
     cartFull: `Your cart's got a LOT going on already (${MAX_CART_LINES} different items!) — let's get this order checked out before adding more. Type *done* whenever you're ready!`,
     askMode: (fee) => `Pickup 📦 or delivery 🏍️? (Delivery is $${fee} BZD)`,
+    upsellLine: (name, price) => `*${name}* goes well with that — $${price} if you'd like one. No worries either way 😊`,
+    upsellAdded: (name) => `Added *${name}* ✅`,
     pickupConfirm: '📦 Pickup order. Confirm? (yes/no)',
     askAddress: (fee) => `🏍️ What's the delivery address 📍 and a contact number?\n(Delivery fee: $${fee} BZD)`,
     deliveryConfirm: (addr) => `🏍️ Delivery to: ${addr}\n\nConfirm order? (yes/no)`,
@@ -1483,6 +1485,8 @@ Need help? Type *help* anytime.`,
     cartEmptyCheckout: '¡Carrito vacío, elige algo primero!',
     cartFull: `Tu carrito ya tiene bastante (¡${MAX_CART_LINES} artículos distintos!) — finalicemos esta orden antes de añadir más. ¡Escribe *listo* cuando estés listo!`,
     askMode: (fee) => `¿Recoger 📦 o entrega 🏍️? (La entrega cuesta $${fee} BZD)`,
+    upsellLine: (name, price) => `*${name}* combina bien con eso — $${price} si quieres uno. Sin problema si no 😊`,
+    upsellAdded: (name) => `Añadí *${name}* ✅`,
     pickupConfirm: '📦 Orden para recoger. ¿Confirmas? (si/no)',
     askAddress: (fee) => `🏍️ ¿Cuál es la dirección de entrega 📍 y un número de contacto?\n(Costo de entrega: $${fee} BZD)`,
     deliveryConfirm: (addr) => `🏍️ Entrega a: ${addr}\n\n¿Confirmas la orden? (si/no)`,
@@ -1579,6 +1583,7 @@ function newSession() {
     escalationStage: 0, // 0=none, 1=softened tone shown, 2=shortcut offered, 3=escalated to a human — one-way ratchet, resets with the session
     transcript: [], // { role: 'customer'|'bot', text } — capped, attached on human handoff
     duplicateWarningAcked: false, // see the duplicate-order soft-warning at 'confirm'
+    upsellOffered: false, // the add-on suggestion is offered at most ONCE per order — see pickUpsell()
   };
 }
 
@@ -1823,6 +1828,60 @@ function cartText(cart, lang) {
   });
   text += `\n${t.cartTotal(cartTotal(cart).toFixed(2))}`;
   return text;
+}
+
+// ---- ADD-ON SUGGESTION ("anything to drink with that?") ----
+// Deliberately NOT a checkout step. The suggestion rides along as a third
+// button on the pickup/delivery question the customer is already answering,
+// so ignoring it costs one glance — no extra turn to sit through, no second
+// ask, no "are you sure?". Every rule below exists to keep it feeling like a
+// person at a counter rather than a conversion funnel.
+const UPSELL_DRINK_CATEGORIES = ['1', '2', '3', '4', '5', '6', '7'];
+const UPSELL_FOOD_CATEGORIES = ['8', '9', '10', '11'];
+// A cart this size is a group order. Offering it one more $2.50 hot dog
+// reads as noise, not service — stay quiet instead.
+const UPSELL_MAX_CART_LINES = 6;
+
+// Cheapest available item across `categoryIds`. Skips sold-out items, and
+// skips anything with sizes: a sized pick would need a Regular/Large
+// follow-up, turning a one-tap add-on into a flow. Cheapest rather than
+// priciest on purpose — a real counter offers the $5 juice, not the $12 sub.
+function cheapestAvailableIn(categoryIds) {
+  let best = null;
+  for (const catId of categoryIds) {
+    const cat = MENU.find(c => c.id === catId);
+    if (!cat) continue;
+    cat.items.forEach((item, i) => {
+      const itemIndex = i + 1;
+      if (item.sizes || typeof item.price !== 'number') return;
+      if (isItemSoldOut(catId, itemIndex)) return;
+      if (!best || item.price < best.item.price) best = { item, categoryId: catId, itemIndex };
+    });
+  }
+  return best;
+}
+
+// Returns an add-on worth mentioning, or null to say nothing at all.
+// Silence is the default: no filler "anything else?" when there is no
+// genuine gap to fill.
+function pickUpsell(session) {
+  const cart = session.cart;
+  if (session.upsellOffered) return null;          // asked once, never twice
+  if (!cart.length || cart.length > UPSELL_MAX_CART_LINES) return null;
+  const hasFood = cart.some(i => UPSELL_FOOD_CATEGORIES.includes(i.categoryId));
+  const hasDrink = cart.some(i => UPSELL_DRINK_CATEGORIES.includes(i.categoryId));
+  if (hasFood === hasDrink) return null;           // has both, or neither — nothing useful to add
+  return cheapestAvailableIn(hasFood ? UPSELL_DRINK_CATEGORIES : UPSELL_FOOD_CATEGORIES);
+}
+
+// Picks the offer AND marks it spent, so the "once per order" rule is
+// enforced structurally rather than by remembering to check at each of
+// modeButtonsMessage's seven call sites — only the checkout hand-off calls
+// this one; every other path re-renders the question without an offer.
+function takeUpsell(session) {
+  const pick = pickUpsell(session);
+  if (pick) session.upsellOffered = true;
+  return pick;
 }
 
 function matchSizeChoice(msg, sizes) {
@@ -2346,18 +2405,21 @@ function sizeButtonsMessage(item, lang, categoryId, itemIndex) {
   };
 }
 
-function modeButtonsMessage(fee, lang) {
-  const body = TXT[lang].askMode(fee);
-  return {
-    buttons: {
-      body,
-      buttons: [
-        { id: 'pickup', title: lang === 'es' ? 'Recoger 📦' : 'Pickup 📦' },
-        { id: 'delivery', title: lang === 'es' ? 'Entrega 🏍️' : 'Delivery 🏍️' },
-      ],
-    },
-    fallback: body,
-  };
+// `upsell` is optional and comes from takeUpsell(). When absent this renders
+// byte-identical to what it always did — the add-on never changes the
+// question, it only ever appends to it.
+function modeButtonsMessage(fee, lang, upsell = null) {
+  const t = TXT[lang];
+  const body = upsell
+    ? `${t.askMode(fee)}\n\n${t.upsellLine(upsell.item.name, upsell.item.price.toFixed(2))}`
+    : t.askMode(fee);
+  const buttons = [
+    { id: 'pickup', title: lang === 'es' ? 'Recoger 📦' : 'Pickup 📦' },
+    { id: 'delivery', title: lang === 'es' ? 'Entrega 🏍️' : 'Delivery 🏍️' },
+  ];
+  // WhatsApp allows 3 reply buttons and caps each title at 20 chars.
+  if (upsell) buttons.push({ id: `upsell:${upsell.categoryId}:${upsell.itemIndex}`, title: `➕ ${upsell.item.name}`.slice(0, 20) });
+  return { buttons: { body, buttons }, fallback: body };
 }
 
 function confirmButtonsMessage(bodyText, lang) {
@@ -2940,7 +3002,7 @@ function tryCheckout(session, lang, emptyCartFallbackViews) {
   // instead of a dead end (see the 'confirm' step's isPreorder handling).
   session.step = 'mode';
   funnelCounters.checkoutStarted++;
-  return [cartText(session.cart, lang), modeButtonsMessage(SHOP_INFO.deliveryFee, lang)];
+  return [cartText(session.cart, lang), modeButtonsMessage(SHOP_INFO.deliveryFee, lang, takeUpsell(session))];
 }
 
 // Table-driven owner commands (see OWNER_NUMBERS above for the full list
@@ -3723,6 +3785,28 @@ async function processWhatsAppMessage(message, res) {
         if (msg === '0' || msg === 'atras' || msg === 'atrás' || msg === 'back') {
           session.step = 'menu';
           reply = [cartText(session.cart, lang), ...categoryListMessages(lang)];
+          break;
+        }
+
+        // Add-on button tapped. Adds one, then re-asks the SAME question
+        // without the offer — declining is just answering the question that
+        // was already on screen, and accepting never leads to a second pitch.
+        if (msg.startsWith('upsell:')) {
+          const [, upCat, upIdxRaw] = msg.split(':');
+          const upIdx = Number(upIdxRaw);
+          const cat = MENU.find(c => c.id === upCat);
+          const item = cat && cat.items[upIdx - 1];
+          // Sold out or discontinued between the offer and the tap: say
+          // nothing about it, just put the question back up.
+          if (!item || item.sizes || isItemSoldOut(upCat, upIdx)) {
+            reply = modeButtonsMessage(SHOP_INFO.deliveryFee, lang);
+            break;
+          }
+          if (!addToCart(session.cart, item.name, item.price, 1, '', upCat, upIdx)) {
+            reply = [t.cartFull, modeButtonsMessage(SHOP_INFO.deliveryFee, lang)];
+            break;
+          }
+          reply = [t.upsellAdded(item.name), cartText(session.cart, lang), modeButtonsMessage(SHOP_INFO.deliveryFee, lang)];
           break;
         }
         if (msg.includes('pickup') || msg.includes('pick up') || msg.includes('recoger')) {
