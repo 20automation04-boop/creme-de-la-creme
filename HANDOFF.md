@@ -40,10 +40,17 @@ the current value in both `DRIVER_NUMBERS` and `OWNER_NUMBERS`).
    Note: on Windows/Node 25 the glob form `node --test test/*.test.js` is
    required; bare `node --test test/` fails with `Cannot find module 'test'`.
 4. Deploy target is **Railway**, project `creme-de-la-creme-bot`. **There is
-   no CI/CD** — deploy is a manual `railway up --detach` run from this
+   no CD** — deploy is a manual `railway up --detach` run from this
    directory. Editing `index.js` locally does nothing to the live bot until
    you deploy. Requires the Railway CLI logged in to the account that owns
    that project.
+   There IS CI: `.github/workflows/test.yml` runs `npm test` on every push
+   and PR, with no credentials (BOT_DRY_RUN keeps it off the live number and
+   the real Sheet). It covers the state machine, the ordering flow, the sheet
+   parser and the HTTP auth surface — but NOT the Gemini prompt, which needs
+   a real key. Use `node check-ai-parsing.js` for that, by hand.
+   Because nothing gates the deploy itself, a green CI run is necessary but
+   not sufficient: still run the suite locally before `railway up`.
 
 ## Secrets (transfer separately, never via git)
 
