@@ -1,15 +1,39 @@
 {
-  "name": "back-navigation-through-size-and-item",
+  "name": "back-navigation-through-category-and-item",
   "from": "19990000004",
   "turns": [
-    { "in": "1", "expectStep": "menu" },
-    { "in": "6", "expectStep": "item" },
-    { "in": "1", "expectStep": "size" },
-    { "in": "0", "expectStep": "item" },
-    { "in": "0", "expectStep": "menu" },
-    { "in": "6", "expectStep": "item" },
-    { "in": "1", "expectStep": "size" },
-    { "in": "1", "expectStep": "quantity" },
-    { "in": "0", "expectStep": "item", "expectCartLength": 0 }
+    {
+      "in": "1",
+      "expectStep": "menu"
+    },
+    {
+      "in": "6",
+      "expectStep": "item"
+    },
+    {
+      "in": "0",
+      "expectStep": "menu"
+    },
+    {
+      "in": "6",
+      "expectStep": "item"
+    },
+    {
+      "comment": "a sized item goes straight in at its default size, no size prompt to interrupt the next tap",
+      "in": "1",
+      "expectStep": "item",
+      "expectCartLength": 1,
+      "expectReplyContains": "Regular"
+    },
+    {
+      "in": "2",
+      "expectStep": "item",
+      "expectCartLength": 2
+    },
+    {
+      "in": "0",
+      "expectStep": "menu",
+      "expectCartLength": 2
+    }
   ]
 }

@@ -2,13 +2,35 @@
   "name": "interactive-button-tap-equivalence",
   "from": "19990000015",
   "turns": [
-    { "buttonId": "en", "expectStep": "menu" },
-    { "in": "1", "expectStep": "item" },
-    { "in": "1", "expectStep": "quantity" },
-    { "in": "1", "expectStep": "notes" },
-    { "in": "0", "expectStep": "item", "expectCartLength": 1 },
-    { "in": "done", "expectStep": "mode" },
-    { "buttonId": "pickup", "expectStep": "confirm" },
-    { "buttonId": "yes", "expectStep": "menu", "expectReplyContains": "confirmed!" }
+    {
+      "buttonId": "en",
+      "expectStep": "menu"
+    },
+    {
+      "in": "1",
+      "expectStep": "item"
+    },
+    {
+      "in": "1",
+      "expectStep": "item",
+      "expectCartLength": 1
+    },
+    {
+      "in": "done",
+      "expectStep": "qtyrecap"
+    },
+    {
+      "in": "1",
+      "expectStep": "mode"
+    },
+    {
+      "buttonId": "pickup",
+      "expectStep": "confirm"
+    },
+    {
+      "buttonId": "yes",
+      "expectStep": "menu",
+      "expectReplyContains": "confirmed!"
+    }
   ]
 }

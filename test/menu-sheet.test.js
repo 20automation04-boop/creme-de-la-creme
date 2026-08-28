@@ -155,3 +155,117 @@ test('a mass disappearance (>30%) is treated as a bad read, not a bulk discontin
   // Restore the real baseline.
   bot.applyMenuSheetRows(allRows);
 });
+
+// ---- STABLE ITEM IDENTITY ----
+// Deleting a row splices the category array, so every later item shifts down
+// one display position. Sold-out state is keyed by the item's stable sheetId
+// precisely so it does NOT shift with it — this used to compare a new position
+// against a flag recorded under the old one, which sold an out-of-stock item
+// and refused its in-stock neighbour at the same time.
+
+// Rows for exactly these items, addressed by their STABLE ids (not by their
+// current position, which is the thing under test).
+function rowsForItems(cat, items, soldOutName) {
+  return items.map(it => [
+    it.sheetId,
+    cat.category,
+    it.name,
+    it.name === soldOutName ? 'FALSE' : 'TRUE',
+    String(it.sizes ? it.sizes[0].price : it.price),
+    '',
+  ]);
+}
+
+test('sold-out state follows the item when an earlier row is discontinued', () => {
+  bot.resetMenuSheetTrackingForTests();
+  const cat = bot.MENU.find(c => c.items.length >= 4);
+  const original = cat.items.slice();
+  bot.applyMenuSheetRows(rowsForItems(cat, original));
+
+  const discontinued = original[1];
+  const soldOut = original[2];
+  const survivors = original.filter(it => it !== discontinued);
+
+  const res = bot.applyMenuSheetRows(rowsForItems(cat, survivors, soldOut.name));
+  bot.soldOutIds.clear();
+  res.soldOut.forEach(id => bot.soldOutIds.add(id));
+
+  assert.ok(!cat.items.includes(discontinued), 'the discontinued item should be gone from the category');
+  assert.ok(cat.items.indexOf(soldOut) !== original.indexOf(soldOut),
+    'this test is only meaningful if the sold-out item actually shifted position');
+
+  const pos = cat.items.indexOf(soldOut) + 1;
+  assert.equal(bot.isItemSoldOut(cat.id, pos), true,
+    `${soldOut.name} is sold out in the sheet and must still read as sold out at its new position ${pos}`);
+
+  cat.items.forEach((item, i) => {
+    if (item === soldOut) return;
+    assert.equal(bot.isItemSoldOut(cat.id, i + 1), false,
+      `${item.name} is in stock and must not inherit a shifted flag`);
+  });
+});
+
+test('an item created after a discontinue does not reuse a surviving item id', () => {
+  bot.resetMenuSheetTrackingForTests();
+  const cat = bot.MENU.find(c => c.items.length >= 4);
+  const original = cat.items.slice();
+  bot.applyMenuSheetRows(rowsForItems(cat, original));
+
+  const survivors = original.filter(it => it !== original[1]);
+  // Discontinue one row and add a brand-new item (bare category id) in the
+  // same refresh: the category is now shorter than its highest issued id, so a
+  // naive `items.length + 1` would collide with a surviving item.
+  bot.applyMenuSheetRows([
+    ...rowsForItems(cat, survivors),
+    [cat.id, cat.category, 'Test Brand New Item', 'TRUE', '3', ''],
+  ]);
+
+  const created = cat.items.find(i => i.name === 'Test Brand New Item');
+  assert.ok(created, 'the new item should have been created');
+  const ids = cat.items.map(i => i.sheetId);
+  assert.equal(new Set(ids).size, ids.length, `sheetIds must be unique within a category, got: ${ids.join(', ')}`);
+});
+
+// A stored cart line (lastOrders, savedCarts) records the item's position at
+// the moment it was added. Both the *repeat* command and the abandoned-cart
+// resume re-check sold-out status later — by which point a discontinue may
+// have slid a different item into that slot. Both now resolve through
+// resolveCartLine(), so this covers the shared helper.
+test('a repeat order re-checks the item it ordered, not whatever now sits in that slot', async () => {
+  bot.resetMenuSheetTrackingForTests();
+  const cat = bot.MENU.find(c => c.items.length >= 4);
+  const original = cat.items.slice();
+  bot.applyMenuSheetRows(rowsForItems(cat, original));
+
+  const from = '19990000951';
+  delete bot.sessions[from];
+  delete bot.lastOrders[from];
+  const res = () => ({ headersSent: false, sendStatus() { this.headersSent = true; } });
+  let n = 0;
+  const send = (body) => bot.processWhatsAppMessage(
+    { from, id: `repeat-stale-${++n}`, type: 'text', text: { body } }, res());
+
+  // Order the item at display position 3 and confirm it.
+  // Tap the item, finish selecting, then answer the one quantity question.
+  for (const turn of ['1', cat.id, '3', 'done', '1', 'pickup', 'yes']) await send(turn);
+  const ordered = original[2];
+  assert.equal(bot.lastOrders[from].cart[0].name, ordered.name);
+  assert.equal(bot.lastOrders[from].cart[0].sheetId, ordered.sheetId,
+    'the cart line must record the stable id, not just the position');
+
+  // Discontinue the item ABOVE it (everything below shifts up one) and mark
+  // the ordered item sold out.
+  const survivors = original.filter(it => it !== original[1]);
+  const r = bot.applyMenuSheetRows(rowsForItems(cat, survivors, ordered.name));
+  bot.soldOutIds.clear();
+  r.soldOut.forEach(id => bot.soldOutIds.add(id));
+  assert.notEqual(cat.items.indexOf(ordered) + 1, 3,
+    'this test is only meaningful if the ordered item actually shifted position');
+
+  bot.dryRunSent.length = 0;
+  await send('repeat');
+
+  const cartNames = bot.sessions[from].cart.map(c => c.name);
+  assert.ok(!cartNames.includes(ordered.name),
+    `${ordered.name} is sold out and must not be re-added by repeat, got cart: ${cartNames.join(', ')}`);
+});

@@ -2,16 +2,47 @@
   "name": "happy-path-delivery-with-size-spanish",
   "from": "19990000002",
   "turns": [
-    { "in": "2", "expectStep": "menu" },
-    { "in": "6", "expectStep": "item" },
-    { "in": "1", "expectStep": "size" },
-    { "in": "2", "expectStep": "quantity" },
-    { "in": "1", "expectStep": "notes" },
-    { "in": "sin azucar", "expectStep": "item", "expectCartLength": 1, "expectCartTotal": 8, "expectReplyContains": "Añadido" },
-    { "in": "listo", "expectStep": "mode" },
-    { "in": "entrega", "expectStep": "address" },
-    { "in": "123 Calle Principal", "expectStep": "deliveryNote" },
-    { "comment": "optional landmark step — a typed note reaches the driver", "in": "portón azul junto a la iglesia", "expectStep": "confirm" },
-    { "in": "si", "expectStep": "menu", "expectReplyContains": "confirmada" }
+    {
+      "in": "2",
+      "expectStep": "menu"
+    },
+    {
+      "in": "6",
+      "expectStep": "item"
+    },
+    {
+      "in": "1",
+      "expectStep": "item",
+      "expectCartLength": 1,
+      "expectReplyContains": "Añadido"
+    },
+    {
+      "in": "listo",
+      "expectStep": "qtyrecap"
+    },
+    {
+      "comment": "size and quantity and a request, all in one reply",
+      "in": "1 grande papaya sin azucar",
+      "expectStep": "mode",
+      "expectCartTotal": 8
+    },
+    {
+      "in": "entrega",
+      "expectStep": "address"
+    },
+    {
+      "in": "123 Calle Principal",
+      "expectStep": "deliveryNote"
+    },
+    {
+      "comment": "optional landmark step — a typed note reaches the driver",
+      "in": "portón azul junto a la iglesia",
+      "expectStep": "confirm"
+    },
+    {
+      "in": "si",
+      "expectStep": "menu",
+      "expectReplyContains": "confirmada"
+    }
   ]
 }

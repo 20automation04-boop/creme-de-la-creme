@@ -32,7 +32,7 @@ the current value in both `DRIVER_NUMBERS` and `OWNER_NUMBERS`).
 2. Copy `.env.example` to `.env` and fill in real values (transferred
    separately/securely — never via git; see "Secrets" below).
 3. `node index.js` runs it locally. `npm test` runs the replay suite
-   (`node --test test/*.test.js`) — 34 tests covering the ordering FSM,
+   (`node --test test/*.test.js`) — 52 tests covering the ordering FSM,
    button routing, owner commands, and the escalation ladder. They use
    `BOT_DRY_RUN=1` (set by the test files themselves) so no real WhatsApp
    send or Sheets write happens, even with real credentials in `.env`.
@@ -40,10 +40,17 @@ the current value in both `DRIVER_NUMBERS` and `OWNER_NUMBERS`).
    Note: on Windows/Node 25 the glob form `node --test test/*.test.js` is
    required; bare `node --test test/` fails with `Cannot find module 'test'`.
 4. Deploy target is **Railway**, project `creme-de-la-creme-bot`. **There is
-   no CI/CD** — deploy is a manual `railway up --detach` run from this
+   no CD** — deploy is a manual `railway up --detach` run from this
    directory. Editing `index.js` locally does nothing to the live bot until
    you deploy. Requires the Railway CLI logged in to the account that owns
    that project.
+   There IS CI: `.github/workflows/test.yml` runs `npm test` on every push
+   and PR, with no credentials (BOT_DRY_RUN keeps it off the live number and
+   the real Sheet). It covers the state machine, the ordering flow, the sheet
+   parser and the HTTP auth surface — but NOT the Gemini prompt, which needs
+   a real key. Use `node check-ai-parsing.js` for that, by hand.
+   Because nothing gates the deploy itself, a green CI run is necessary but
+   not sufficient: still run the suite locally before `railway up`.
 
 ## Secrets (transfer separately, never via git)
 
@@ -100,12 +107,66 @@ message). Summary of what it adds:
   internals a test harness needs to drive it. This was scaffolding-only at
   handoff time; **it is finished now** — `test/replay.test.js` and
   `test/menu-sheet.test.js` exist, with fixtures in `test/replays/*.json`,
-  and all 34 pass. Do not rip it out.
+  and all 52 pass. Do not rip it out.
 - `sendReply` was changed from fire-and-forget to properly `async`/awaited
   so that two rapid messages from the same sender have their actual sends
   (not just session-state mutations) stay in order under the existing
   per-sender lock.
 
+## Security posture (read before exposing this to a new client)
+
+The Railway URL is public — anyone who finds it can reach every route. What
+holds the line, and what to re-check if you change any of it:
+
+- **`CHAKRA_WEBHOOK_SECRET` must be set.** With it set, `/whatsapp` requires a
+  valid HMAC. With it UNSET, verification is skipped entirely (a deliberate
+  opt-out) — and since `isOwner()` trusts the `from` in the payload, an
+  unverified deployment lets anyone run owner commands by putting the owner
+  number in a forged webhook. Treat an unset secret as "no access control".
+- **`WEBHOOK_VERIFY_TOKEN` must be set**, or `GET /whatsapp` refuses every
+  verification handshake. It previously handed the challenge to any caller
+  when the variable was missing.
+- **`KITCHEN_PASSWORD` must be long and random.** It is the only thing guarding
+  customer phone numbers and addresses on `/kitchen`. Wrong guesses are capped
+  at 10 per 15 minutes globally (failures only, so staff logins never count).
+  The cookie is a bearer token valid for a year, so rotating the password is
+  what revokes a lost or stolen device.
+- **Customer-typed values go through `sheetSafe()` before any Sheets write.**
+  Sheets evaluates a cell starting with `=`, `+`, `-` or `@` as a formula, so an
+  unescaped saved address can execute when staff open the tab. Any NEW code that
+  writes user text to a sheet must use it.
+- **The Gemini prompt fences the customer message as data.** `answer` is sent to
+  the customer verbatim as the shop, so a customer who can steer it can make the
+  business appear to say things. Before changing that prompt, run
+  `GOOGLE_API_KEY=... node check-ai-parsing.js` on the old and new versions and
+  compare — it checks order matching (a regression there costs real orders), FAQ
+  answers, and injection resistance. Nothing else in the repo can catch a prompt
+  regression: the replay suite runs with no AI at all.
+- `test/security.test.js` pins all of the above. Run it after touching any
+  route auth — it drives the real Express app over a socket, so it sees the
+  request-edge cases the replay suite cannot.
+
+## Menu item identity (do not key off display position)
+
+Each menu item carries a stable `item.sheetId` (`"categoryId.N"`), stamped once
+at load and never recomputed. The Availability sheet, `soldOutIds`, and the
+owner's `soldout`/`instock` write-through all key off it.
+
+They must, because a display position is NOT stable: deleting a row from the
+Availability tab splices the category array, so every later item shifts down
+one. Keying sold-out state by position used to produce both failure modes at
+once — the item that was really sold out kept selling, and its in-stock
+neighbour was refused. `itemAt(categoryId, itemIndex)` is the one sanctioned
+place to turn a position (what the customer typed or tapped) into an item.
+
+That applies to stored cart lines too. `savedCarts` and `lastOrders` outlive
+menu edits, so each line carries `sheetId` and is resolved back to a live item
+with `resolveCartLine()` before its sold-out status is re-checked — the *repeat*
+command and the abandoned-cart resume both do this. Checking the stored position
+instead read whatever item had since slid into that slot.
+
+New code that records anything per-item should key off `item.sheetId`, never
+off the item's index. `test/menu-sheet.test.js` pins this.
 ## Testing safety rules (important)
 
 - Safe to test freely: syntax/type checks, running the server locally,

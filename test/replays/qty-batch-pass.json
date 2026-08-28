@@ -1,0 +1,53 @@
+{
+  "name": "tap-several-items-then-set-all-amounts-in-one-reply",
+  "from": "19990000034",
+  "turns": [
+    {
+      "in": "1",
+      "expectStep": "menu"
+    },
+    {
+      "in": "1",
+      "expectStep": "item"
+    },
+    {
+      "comment": "each tap adds one and leaves the list up — nothing interrupts selection",
+      "in": "1",
+      "expectStep": "item",
+      "expectCartLength": 1,
+      "expectReplyContains": "Added"
+    },
+    {
+      "in": "3",
+      "expectStep": "item",
+      "expectCartLength": 2
+    },
+    {
+      "in": "5",
+      "expectStep": "item",
+      "expectCartLength": 3
+    },
+    {
+      "comment": "finished selecting — the whole order is read back at once",
+      "in": "done",
+      "expectStep": "qtyrecap"
+    },
+    {
+      "comment": "amounts, plus a request on one of them, in a single message",
+      "in": "2 vanilla, 1 chocolate no ice, 3 colada",
+      "expectStep": "mode",
+      "expectCartLength": 3,
+      "expectCartTotal": 42,
+      "expectReplyContains": "no ice"
+    },
+    {
+      "in": "pickup",
+      "expectStep": "confirm"
+    },
+    {
+      "in": "yes",
+      "expectStep": "menu",
+      "expectReplyContains": "confirmed!"
+    }
+  ]
+}

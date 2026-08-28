@@ -2,24 +2,62 @@
   "name": "natural-language-commands-and-false-positive-guards",
   "from": "19990000029",
   "turns": [
-    { "in": "1", "expectStep": "menu" },
-
-    { "comment": "add an item by menu number, not free text, so this fixture never depends on a live Gemini call", "in": "1", "expectStep": "item" },
-    { "in": "1", "expectStep": "quantity" },
-    { "in": "2", "expectStep": "notes" },
-    { "buttonId": "none", "expectStep": "item", "expectCartLength": 1 },
-
-    { "comment": "GUARD: a customization phrase containing 'no more' must NOT check out", "in": "no more onions please", "expectStep": "item", "expectCartLength": 1 },
-
-    { "comment": "prose cart lookup", "in": "what was my order", "expectStep": "item", "expectCartLength": 1, "expectReplyContains": "Your order" },
-    { "in": "show me my order", "expectCartLength": 1, "expectReplyContains": "Your order" },
-
-    { "comment": "prose help + menu", "in": "how does this work", "expectReplyContains": "How to order" },
-    { "in": "show me the menu", "expectStep": "menu", "expectCartLength": 1 },
-
-    { "comment": "prose checkout", "in": "thats all", "expectStep": "mode" },
-    { "in": "back", "expectStep": "menu" },
-
-    { "comment": "prose cancel wipes the cart", "in": "never mind", "expectCartLength": 0, "expectReplyContains": "cancelled" }
+    {
+      "in": "1",
+      "expectStep": "menu"
+    },
+    {
+      "comment": "add an item by menu number, not free text, so this fixture never depends on a live Gemini call",
+      "in": "1",
+      "expectStep": "item"
+    },
+    {
+      "in": "1",
+      "expectStep": "item",
+      "expectCartLength": 1
+    },
+    {
+      "comment": "GUARD: a customization phrase containing 'no more' must NOT check out",
+      "in": "no more onions please",
+      "expectStep": "item",
+      "expectCartLength": 1
+    },
+    {
+      "comment": "prose cart lookup",
+      "in": "what was my order",
+      "expectStep": "item",
+      "expectCartLength": 1,
+      "expectReplyContains": "Your order"
+    },
+    {
+      "in": "show me my order",
+      "expectCartLength": 1,
+      "expectReplyContains": "Your order"
+    },
+    {
+      "comment": "prose help + menu",
+      "in": "how does this work",
+      "expectReplyContains": "How to order"
+    },
+    {
+      "in": "show me the menu",
+      "expectStep": "menu",
+      "expectCartLength": 1
+    },
+    {
+      "comment": "prose checkout",
+      "in": "thats all",
+      "expectStep": "qtyrecap"
+    },
+    {
+      "in": "back",
+      "expectStep": "menu"
+    },
+    {
+      "comment": "prose cancel wipes the cart",
+      "in": "never mind",
+      "expectCartLength": 0,
+      "expectReplyContains": "cancelled"
+    }
   ]
 }

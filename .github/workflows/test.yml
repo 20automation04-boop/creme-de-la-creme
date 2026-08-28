@@ -1,0 +1,47 @@
+name: tests
+
+# There is no CD here — deploys are a manual `railway up` from someone's
+# laptop (see HANDOFF.md). That makes this workflow the ONLY automated thing
+# standing between a push and a bot that takes real orders, so it has to stay
+# green and it has to stay fast.
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+# A newer push to the same branch makes the older run irrelevant.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+
+      - run: npm ci
+
+      # Deliberately no credentials in this job.
+      #
+      # The replay and menu-sheet suites set BOT_DRY_RUN=1 themselves before
+      # requiring index.js, so every WhatsApp send and Sheets read/write is
+      # stubbed — this job cannot touch the live number or the real Sheet even
+      # by accident. interpretMessage's Gemini call fails closed to
+      # {matches: [], answer: null} with no GOOGLE_API_KEY, and the fixtures
+      # assert on FSM structure (step reached, cart total, a distinctive
+      # substring) rather than on AI output, so they pass without one.
+      #
+      # What this means: CI proves the state machine, the ordering flow, the
+      # sheet-row parser and the HTTP auth surface. It does NOT cover the
+      # Gemini prompt — that needs a real key, and `node check-ai-parsing.js`
+      # is the tool for it. Run that by hand whenever you touch the prompt.
+      - run: npm test
