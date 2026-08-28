@@ -431,9 +431,20 @@ const sheets = google.sheets({ version: 'v4', auth: sheetsAuth });
 // silent no-op. This means replay tests exercise the FSM/state-machine
 // layer only, not real Sheets integration (that's covered by this project's
 // existing live-smoke-test practice instead).
+// Tests can seed rows per range (e.g. dryRunSheetRows['Manager!A2:H'] = [...])
+// so the dashboard endpoints' real parsing — money formatting, splitting the
+// address and landmark back out of the mode cell, filtering by status — is
+// exercised against known data instead of only ever seeing an empty sheet.
+// Empty by default, so anything that doesn't seed still reads nothing.
+const dryRunSheetRows = {};
+const dryRunSheetWrites = [];
+
 if (BOT_DRY_RUN) {
-  sheets.spreadsheets.values.get = async () => ({ data: { values: [] } });
-  sheets.spreadsheets.values.update = async () => ({ data: {} });
+  sheets.spreadsheets.values.get = async ({ range }) => ({ data: { values: dryRunSheetRows[range] || [] } });
+  sheets.spreadsheets.values.update = async ({ range, requestBody }) => {
+    dryRunSheetWrites.push({ range, values: requestBody && requestBody.values });
+    return { data: {} };
+  };
 }
 
 // ---- OWNER COMMANDS ----
@@ -5889,4 +5900,4 @@ if (require.main === module) {
 
 // For the replay-test harness (test/replay.test.js) only — production never
 // requires this file as a module, so these exports are inert otherwise.
-module.exports = { app, processWhatsAppMessage, dryRunSent, sessions, lastOrders, savedCarts, cartTotal, OWNER_NUMBERS, DRIVER_NUMBERS, soldOutIds, sweepIdleSessions, replySummaryText, MENU, applyMenuSheetRows, resetMenuSheetTrackingForTests, notifyStatusChange };
+module.exports = { app, processWhatsAppMessage, dryRunSent, sessions, lastOrders, savedCarts, cartTotal, OWNER_NUMBERS, DRIVER_NUMBERS, soldOutIds, sweepIdleSessions, replySummaryText, MENU, applyMenuSheetRows, resetMenuSheetTrackingForTests, notifyStatusChange, dryRunSheetRows, dryRunSheetWrites };
