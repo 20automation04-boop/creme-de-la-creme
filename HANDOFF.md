@@ -32,7 +32,7 @@ the current value in both `DRIVER_NUMBERS` and `OWNER_NUMBERS`).
 2. Copy `.env.example` to `.env` and fill in real values (transferred
    separately/securely — never via git; see "Secrets" below).
 3. `node index.js` runs it locally. `npm test` runs the replay suite
-   (`node --test test/*.test.js`) — 40 tests covering the ordering FSM,
+   (`node --test test/*.test.js`) — 46 tests covering the ordering FSM,
    button routing, owner commands, and the escalation ladder. They use
    `BOT_DRY_RUN=1` (set by the test files themselves) so no real WhatsApp
    send or Sheets write happens, even with real credentials in `.env`.
@@ -100,11 +100,45 @@ message). Summary of what it adds:
   internals a test harness needs to drive it. This was scaffolding-only at
   handoff time; **it is finished now** — `test/replay.test.js` and
   `test/menu-sheet.test.js` exist, with fixtures in `test/replays/*.json`,
-  and all 40 pass. Do not rip it out.
+  and all 46 pass. Do not rip it out.
 - `sendReply` was changed from fire-and-forget to properly `async`/awaited
   so that two rapid messages from the same sender have their actual sends
   (not just session-state mutations) stay in order under the existing
   per-sender lock.
+
+## Security posture (read before exposing this to a new client)
+
+The Railway URL is public — anyone who finds it can reach every route. What
+holds the line, and what to re-check if you change any of it:
+
+- **`CHAKRA_WEBHOOK_SECRET` must be set.** With it set, `/whatsapp` requires a
+  valid HMAC. With it UNSET, verification is skipped entirely (a deliberate
+  opt-out) — and since `isOwner()` trusts the `from` in the payload, an
+  unverified deployment lets anyone run owner commands by putting the owner
+  number in a forged webhook. Treat an unset secret as "no access control".
+- **`WEBHOOK_VERIFY_TOKEN` must be set**, or `GET /whatsapp` refuses every
+  verification handshake. It previously handed the challenge to any caller
+  when the variable was missing.
+- **`KITCHEN_PASSWORD` must be long and random.** It is the only thing guarding
+  customer phone numbers and addresses on `/kitchen`. Wrong guesses are capped
+  at 10 per 15 minutes globally (failures only, so staff logins never count).
+  The cookie is a bearer token valid for a year, so rotating the password is
+  what revokes a lost or stolen device.
+- **Customer-typed values go through `sheetSafe()` before any Sheets write.**
+  Sheets evaluates a cell starting with `=`, `+`, `-` or `@` as a formula, so an
+  unescaped saved address can execute when staff open the tab. Any NEW code that
+  writes user text to a sheet must use it.
+- `test/security.test.js` pins all of the above. Run it after touching any
+  route auth — it drives the real Express app over a socket, so it sees the
+  request-edge cases the replay suite cannot.
+
+## Known unfixed issue
+
+Discontinuing a menu item by DELETING its row from the Availability tab shifts
+every later item in that category by one position, while `soldOutIds` and
+`menuItemById` keep the old positional keys — so a sold-out flag lands on the
+wrong item (an out-of-stock item keeps selling, and an in-stock one is refused).
+Until the keys are made stable, mark a row unavailable instead of deleting it.
 
 ## Testing safety rules (important)
 
