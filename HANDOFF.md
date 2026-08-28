@@ -128,6 +128,13 @@ holds the line, and what to re-check if you change any of it:
   Sheets evaluates a cell starting with `=`, `+`, `-` or `@` as a formula, so an
   unescaped saved address can execute when staff open the tab. Any NEW code that
   writes user text to a sheet must use it.
+- **The Gemini prompt fences the customer message as data.** `answer` is sent to
+  the customer verbatim as the shop, so a customer who can steer it can make the
+  business appear to say things. Before changing that prompt, run
+  `GOOGLE_API_KEY=... node check-ai-parsing.js` on the old and new versions and
+  compare — it checks order matching (a regression there costs real orders), FAQ
+  answers, and injection resistance. Nothing else in the repo can catch a prompt
+  regression: the replay suite runs with no AI at all.
 - `test/security.test.js` pins all of the above. Run it after touching any
   route auth — it drives the real Express app over a socket, so it sees the
   request-edge cases the replay suite cannot.
