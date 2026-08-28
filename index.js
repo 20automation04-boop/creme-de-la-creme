@@ -4509,6 +4509,9 @@ const KITCHEN_HTML = `<!doctype html>
   .count { background:var(--new); color:#000; font-weight:700; border-radius:999px;
            padding:2px 11px; font-size:15px; }
   .muted { color:var(--dim); font-size:13px; margin-left:auto; }
+  .legend { display:flex; gap:12px; flex-wrap:wrap; font-size:12px; color:var(--dim); }
+  .legend span { display:flex; align-items:center; gap:5px; }
+  .legend i { width:11px; height:11px; border-radius:3px; display:inline-block; }
   main { padding:16px; display:grid; gap:14px;
          grid-template-columns:repeat(auto-fill,minmax(330px,1fr)); }
   .card { background:var(--card); border:1px solid var(--line); border-left:5px solid var(--new);
@@ -4556,6 +4559,12 @@ const KITCHEN_HTML = `<!doctype html>
 <div id="app" hidden>
   <header>
     <h1>Orders</h1><span class="count" id="count">0</span>
+    <span class="legend">
+      <span><i style="background:var(--new)"></i>New</span>
+      <span><i style="background:var(--prep)"></i>Preparing</span>
+      <span><i style="background:var(--ready)"></i>Ready</span>
+      <span><i style="background:var(--deliver)"></i>Out</span>
+    </span>
     <span class="muted" id="updated">—</span>
   </header>
   <main id="list"></main>
@@ -4730,6 +4739,239 @@ app.post('/kitchen/message', async (req, res) => {
     console.error('Kitchen dashboard message failed:', err.message || err);
     res.status(500).json({ error: 'could not send message' });
   }
+});
+
+// ---- MANAGER DASHBOARD ----
+// Everything the kitchen view deliberately leaves out: money, history,
+// customers, menu availability. Behind its OWN password, not the kitchen
+// one — kitchen staff need the order queue, they don't need revenue totals
+// or the customer list.
+const MANAGER_COOKIE = 'manager_auth';
+
+function managerPasswordHash() {
+  return crypto.createHash('sha256').update(String(process.env.MANAGER_PASSWORD || '')).digest('hex');
+}
+
+function requireManagerAuth(req, res) {
+  if (!process.env.MANAGER_PASSWORD) {
+    res.status(503).json({ error: 'Manager dashboard is not configured — set MANAGER_PASSWORD.' });
+    return false;
+  }
+  const raw = req.headers.cookie || '';
+  const match = raw.split(';').map(c => c.trim()).find(c => c.startsWith(`${MANAGER_COOKIE}=`));
+  const supplied = match ? match.slice(MANAGER_COOKIE.length + 1) : '';
+  const a = Buffer.from(supplied);
+  const b = Buffer.from(managerPasswordHash());
+  if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) {
+    res.status(401).json({ error: 'unauthorized' });
+    return false;
+  }
+  return true;
+}
+
+app.post('/manager/login', (req, res) => {
+  if (!process.env.MANAGER_PASSWORD) return res.status(503).json({ error: 'not configured' });
+  const supplied = String((req.body && req.body.password) || '');
+  const a = Buffer.from(crypto.createHash('sha256').update(supplied).digest('hex'));
+  const b = Buffer.from(managerPasswordHash());
+  if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) {
+    return res.status(401).json({ error: 'wrong password' });
+  }
+  res.setHeader('Set-Cookie', `${MANAGER_COOKIE}=${managerPasswordHash()}; Max-Age=31536000; Path=/manager; HttpOnly; SameSite=Lax`);
+  res.json({ ok: true });
+});
+
+app.get('/manager/data', async (req, res) => {
+  if (!requireManagerAuth(req, res)) return;
+  try {
+    managerRowsCache = null;
+    const rows = await fetchManagerRows();
+
+    // "Today" is judged in shop time, from the same locale-formatted
+    // timestamp logOrderToSheets writes ("8/27/26, 2:30 PM").
+    const todayPrefix = new Date().toLocaleString('en-US', {
+      timeZone: SHOP_HOURS.timezone, dateStyle: 'short', timeStyle: 'short',
+    }).split(',')[0];
+
+    let todayCount = 0, todayRevenue = 0, allRevenue = 0;
+    const orders = [];
+    for (const r of rows) {
+      const [orderNumber, timestamp, items, total, mode, language, phone, status] = r;
+      if (!orderNumber) continue;
+      const amount = parseFloat(String(total || '').replace(/[^0-9.]/g, '')) || 0;
+      const isToday = String(timestamp || '').startsWith(todayPrefix);
+      const st = (status || 'Confirmed').trim();
+      // Cancelled orders are shown in history but never counted as money.
+      if (st !== 'Cancelled') {
+        allRevenue += amount;
+        if (isToday) { todayCount++; todayRevenue += amount; }
+      }
+      orders.push({ orderNumber, timestamp, items, total: amount, mode, status: st, isToday });
+    }
+    orders.reverse();
+
+    const { topItems, peakHour } = await getOrderStats();
+    const soldOut = [];
+    MENU.forEach(cat => cat.items.forEach((item, i) => {
+      if (isItemSoldOut(cat.id, i + 1)) soldOut.push(`${item.name} (${cat.category})`);
+    }));
+
+    res.json({
+      todayCount,
+      todayRevenue: todayRevenue.toFixed(2),
+      allCount: orders.filter(o => o.status !== 'Cancelled').length,
+      allRevenue: allRevenue.toFixed(2),
+      avgOrder: orders.length ? (allRevenue / Math.max(1, orders.filter(o => o.status !== 'Cancelled').length)).toFixed(2) : '0.00',
+      topItems,
+      peakHour: peakHour === null ? null : formatHour12(peakHour),
+      soldOut,
+      customerCount: Object.keys(customerProfiles).length,
+      ordersPaused,
+      funnel: funnelCounters,
+      orders: orders.slice(0, 60),
+    });
+  } catch (err) {
+    console.error('Manager dashboard data failed:', err.message || err);
+    res.status(500).json({ error: 'could not load data' });
+  }
+});
+
+const MANAGER_HTML = `<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Manager — Créme De La Créme</title>
+<style>
+  :root { --bg:#12141a; --card:#1c1f28; --line:#2c3140; --text:#f2f4f8; --dim:#98a0b3;
+          --good:#22c55e; --warn:#ffb020; --bad:#ef4444; --accent:#3b82f6; }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--text);
+         font:16px/1.5 system-ui,-apple-system,Segoe UI,Roboto,sans-serif; }
+  header { position:sticky; top:0; background:var(--bg); border-bottom:1px solid var(--line);
+           padding:14px 18px; display:flex; align-items:center; gap:12px; z-index:5; flex-wrap:wrap; }
+  h1 { font-size:19px; margin:0; font-weight:650; }
+  h2 { font-size:14px; margin:26px 0 10px; color:var(--dim); text-transform:uppercase; letter-spacing:.06em; }
+  .muted { color:var(--dim); font-size:13px; margin-left:auto; }
+  main { padding:16px; max-width:1100px; margin:0 auto; }
+  .tiles { display:grid; gap:12px; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); }
+  .tile { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:14px 16px; }
+  .tile .k { color:var(--dim); font-size:12px; text-transform:uppercase; letter-spacing:.05em; }
+  .tile .v { font-size:26px; font-weight:700; margin-top:4px; }
+  .tile .v.money::before { content:'$'; font-size:17px; opacity:.65; margin-right:1px; }
+  .pill { display:inline-block; font-size:12px; font-weight:700; padding:3px 9px; border-radius:999px; }
+  .pill.on { background:#12301c; color:var(--good); }
+  .pill.off { background:#3a2020; color:#ffc9c9; }
+  table { width:100%; border-collapse:collapse; font-size:14px; }
+  .scroll { overflow-x:auto; border:1px solid var(--line); border-radius:12px; background:var(--card); }
+  th,td { text-align:left; padding:9px 12px; border-bottom:1px solid var(--line); white-space:nowrap; }
+  th { color:var(--dim); font-size:12px; text-transform:uppercase; letter-spacing:.05em; }
+  tr:last-child td { border-bottom:none; }
+  td.items { white-space:normal; min-width:230px; color:var(--dim); }
+  .st { font-size:12px; font-weight:700; padding:2px 8px; border-radius:999px; background:#252a36; }
+  .st.Confirmed { color:var(--warn); } .st.Preparing { color:var(--accent); }
+  .st[class*='Ready'], .st[class*='Out'] { color:var(--good); }
+  .st.Completed { color:var(--dim); } .st.Cancelled { color:var(--bad); }
+  ul.plain { list-style:none; padding:0; margin:0; }
+  ul.plain li { background:var(--card); border:1px solid var(--line); border-radius:8px;
+                padding:9px 12px; margin-bottom:7px; font-size:14px; }
+  .empty { color:var(--dim); font-size:14px; }
+  #login { max-width:340px; margin:16vh auto; padding:26px; background:var(--card);
+           border:1px solid var(--line); border-radius:12px; }
+  #login input { width:100%; font:inherit; padding:12px; margin:12px 0; border-radius:8px;
+                 border:1px solid var(--line); background:#161923; color:var(--text); }
+  #login button { width:100%; font:inherit; font-weight:600; padding:11px; border:none;
+                  border-radius:8px; background:var(--good); color:#04210f; cursor:pointer; }
+  .err { color:#ff9b9b; font-size:14px; min-height:20px; }
+</style>
+</head>
+<body>
+<div id="login" hidden>
+  <h1>Manager Login</h1>
+  <input type="password" id="pw" placeholder="Password" autocomplete="current-password">
+  <button onclick="login()">Enter</button>
+  <div class="err" id="loginErr"></div>
+</div>
+
+<div id="app" hidden>
+  <header><h1>Manager</h1><span id="paused"></span><span class="muted" id="updated">—</span></header>
+  <main>
+    <div class="tiles" id="tiles"></div>
+    <h2>Top items</h2><ul class="plain" id="top"></ul>
+    <h2>Sold out now</h2><ul class="plain" id="soldout"></ul>
+    <h2>Recent orders</h2><div class="scroll"><table>
+      <thead><tr><th>#</th><th>When</th><th>Items</th><th>Total</th><th>Type</th><th>Status</th></tr></thead>
+      <tbody id="rows"></tbody></table></div>
+  </main>
+</div>
+
+<script>
+function esc(s){ return String(s==null?'':s).replace(/[&<>"']/g,function(c){
+  return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];}); }
+
+function login(){
+  fetch('/manager/login',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({password:document.getElementById('pw').value})})
+   .then(function(r){ return r.ok?load():r.json().then(function(j){throw new Error(j.error||'failed');}); })
+   .catch(function(e){ document.getElementById('loginErr').textContent=e.message; });
+}
+
+function tile(k,v,money){ return '<div class="tile"><div class="k">'+esc(k)+
+  '</div><div class="v'+(money?' money':'')+'">'+esc(v)+'</div></div>'; }
+
+function load(){
+  return fetch('/manager/data').then(function(r){
+    if(r.status===401){ document.getElementById('login').hidden=false;
+      document.getElementById('app').hidden=true; throw new Error('auth'); }
+    return r.json();
+  }).then(function(d){
+    document.getElementById('login').hidden=true;
+    document.getElementById('app').hidden=false;
+    document.getElementById('updated').textContent='updated '+new Date().toLocaleTimeString();
+    document.getElementById('paused').innerHTML = d.ordersPaused
+      ? '<span class="pill off">ORDERS PAUSED</span>' : '<span class="pill on">TAKING ORDERS</span>';
+
+    document.getElementById('tiles').innerHTML =
+      tile("Today's orders", d.todayCount) +
+      tile("Today's sales", d.todayRevenue, true) +
+      tile('All-time orders', d.allCount) +
+      tile('All-time sales', d.allRevenue, true) +
+      tile('Average order', d.avgOrder, true) +
+      tile('Busiest hour', d.peakHour || '—') +
+      tile('Saved customers', d.customerCount) +
+      tile('Carts abandoned', d.funnel.cartAbandoned);
+
+    document.getElementById('top').innerHTML = (d.topItems||[]).length
+      ? d.topItems.map(function(p,i){ return '<li>'+(i+1)+'. '+esc(p[0])+
+          ' <span style="color:var(--dim)">— '+p[1]+' orders</span></li>'; }).join('')
+      : '<li class="empty">No orders yet.</li>';
+
+    document.getElementById('soldout').innerHTML = (d.soldOut||[]).length
+      ? d.soldOut.map(function(s){ return '<li>❌ '+esc(s)+'</li>'; }).join('')
+      : '<li class="empty">Everything is in stock.</li>';
+
+    document.getElementById('rows').innerHTML = (d.orders||[]).map(function(o){
+      return '<tr><td><strong>#'+esc(o.orderNumber)+'</strong></td><td>'+esc(o.timestamp)+
+        '</td><td class="items">'+esc(o.items)+'</td><td>$'+o.total.toFixed(2)+
+        '</td><td>'+esc(String(o.mode||'').split(' - ')[0])+
+        '</td><td><span class="st '+esc(o.status.replace(/\\s+/g,''))+'">'+esc(o.status)+
+        '</span></td></tr>';
+    }).join('') || '<tr><td colspan="6" class="empty">No orders yet.</td></tr>';
+  }).catch(function(e){ if(e.message!=='auth') console.error(e); });
+}
+
+load();
+setInterval(load, 30000);
+document.getElementById('pw').addEventListener('keydown',function(e){ if(e.key==='Enter') login(); });
+</script>
+</body>
+</html>`;
+
+app.get('/manager', (req, res) => {
+  if (!process.env.MANAGER_PASSWORD) {
+    return res.status(503).send('Manager dashboard is not configured — set MANAGER_PASSWORD in the environment.');
+  }
+  res.type('html').send(MANAGER_HTML);
 });
 
 app.get('/kitchen', (req, res) => {
