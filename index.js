@@ -547,6 +547,17 @@ async function logOrderToSheets(orderNumber, session, from) {
 
 // Strips a Sheets phone cell (e.g. "'+50161234567") down to bare digits for
 // comparison — the one normalization every phone-matching/lookup site needs.
+// Sheet cells hold whatever was written into them — "14.5", "14.50", "$14.50",
+// or a number Sheets has helpfully stripped a trailing zero from. Staff
+// reading a total off a screen should always see two decimals, so every
+// dashboard formats through here rather than echoing the raw cell.
+// Returns null for a genuinely unreadable value so callers can decide what
+// to show, instead of printing "NaN" at someone.
+function formatMoney(cell) {
+  const n = parseFloat(String(cell == null ? '' : cell).replace(/[^0-9.]/g, ''));
+  return Number.isFinite(n) ? n.toFixed(2) : null;
+}
+
 function normalizePhoneDigits(cell) {
   return (cell || '').replace(/\D/g, '');
 }
@@ -4487,7 +4498,8 @@ app.get('/kitchen/orders', async (req, res) => {
       const [orderNumber, timestamp, items, total, mode, language, phone, status] = r;
       return {
         rowNum: i + 2, // sheet row (header is row 1) — used for the status write
-        orderNumber, timestamp, items, total, mode, language, phone,
+        orderNumber, timestamp, items, mode, language, phone,
+        total: formatMoney(total) || '—',
         status: (status || 'Confirmed').trim(),
       };
     }).filter(o => o.orderNumber && !['Completed', 'Cancelled'].includes(o.status));
@@ -4938,7 +4950,13 @@ app.get('/driver/orders', async (req, res) => {
     const rows = await fetchManagerRows();
     const orders = rows.map((r, i) => {
       const [orderNumber, timestamp, items, total, mode, language, phone, status] = r;
-      return { rowNum: i + 2, orderNumber, timestamp, items, total, mode, phone, status: (status || 'Confirmed').trim() };
+      return {
+        rowNum: i + 2, orderNumber, timestamp, items, mode, phone,
+        // Always two decimals — a driver collecting cash shouldn't have to
+        // read "$14.5" off a sheet cell and work out what to ask for.
+        total: formatMoney(total) || '—',
+        status: (status || 'Confirmed').trim(),
+      };
     }).filter(o =>
       o.orderNumber &&
       String(o.mode || '').toLowerCase().startsWith('delivery') &&
