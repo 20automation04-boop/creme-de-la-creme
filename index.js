@@ -4799,6 +4799,240 @@ app.post('/kitchen/message', async (req, res) => {
   }
 });
 
+// ---- DRIVER DASHBOARD ----
+// Deliveries only, built for one hand on a phone while standing next to a
+// bike: the map link, the landmark note, tap-to-call, and one button to mark
+// it delivered. Its own password — a driver is often not staff, and shouldn't
+// hold the kitchen or manager credential.
+const DRIVER_COOKIE = 'driver_auth';
+
+function driverPasswordHash() {
+  return crypto.createHash('sha256').update(String(process.env.DRIVER_PASSWORD || '')).digest('hex');
+}
+
+function requireDriverAuth(req, res) {
+  if (!process.env.DRIVER_PASSWORD) {
+    res.status(503).json({ error: 'Driver dashboard is not configured — set DRIVER_PASSWORD.' });
+    return false;
+  }
+  const raw = req.headers.cookie || '';
+  const match = raw.split(';').map(c => c.trim()).find(c => c.startsWith(`${DRIVER_COOKIE}=`));
+  const supplied = match ? match.slice(DRIVER_COOKIE.length + 1) : '';
+  const a = Buffer.from(supplied);
+  const b = Buffer.from(driverPasswordHash());
+  if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) {
+    res.status(401).json({ error: 'unauthorized' });
+    return false;
+  }
+  return true;
+}
+
+app.post('/driver/login', (req, res) => {
+  if (!process.env.DRIVER_PASSWORD) return res.status(503).json({ error: 'not configured' });
+  const supplied = String((req.body && req.body.password) || '');
+  const a = Buffer.from(crypto.createHash('sha256').update(supplied).digest('hex'));
+  const b = Buffer.from(driverPasswordHash());
+  if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) {
+    return res.status(401).json({ error: 'wrong password' });
+  }
+  res.setHeader('Set-Cookie', `${DRIVER_COOKIE}=${driverPasswordHash()}; Max-Age=31536000; Path=/driver; HttpOnly; SameSite=Lax`);
+  res.json({ ok: true });
+});
+
+app.get('/driver/orders', async (req, res) => {
+  if (!requireDriverAuth(req, res)) return;
+  try {
+    managerRowsCache = null;
+    const rows = await fetchManagerRows();
+    const orders = rows.map((r, i) => {
+      const [orderNumber, timestamp, items, total, mode, language, phone, status] = r;
+      return { rowNum: i + 2, orderNumber, timestamp, items, total, mode, phone, status: (status || 'Confirmed').trim() };
+    }).filter(o =>
+      o.orderNumber &&
+      String(o.mode || '').toLowerCase().startsWith('delivery') &&
+      !['Completed', 'Cancelled'].includes(o.status)
+    );
+    orders.reverse();
+
+    // Split the mode cell back into address and the landmark note the
+    // deliveryNote step captured — logOrderToSheets writes it as
+    // "Delivery - <address> (<landmark>)".
+    for (const o of orders) {
+      const raw = String(o.mode).replace(/^delivery\s*-\s*/i, '');
+      const m = raw.match(/^([\s\S]*?)\s*\(([^()]*)\)\s*$/);
+      o.address = (m ? m[1] : raw).trim();
+      o.landmark = m ? m[2].trim() : '';
+      const link = o.address.match(/https?:\/\/\S+/);
+      o.mapsLink = link ? link[0] : `https://maps.google.com/?q=${encodeURIComponent(o.address)}`;
+    }
+    res.json({ orders });
+  } catch (err) {
+    console.error('Driver dashboard fetch failed:', err.message || err);
+    res.status(500).json({ error: 'could not load deliveries' });
+  }
+});
+
+app.post('/driver/status', async (req, res) => {
+  if (!requireDriverAuth(req, res)) return;
+  const { rowNum, orderNumber, status } = req.body || {};
+  // Deliberately narrower than the kitchen's list — a driver moves an order
+  // out and marks it delivered, nothing else.
+  if (!['Out for Delivery', 'Completed'].includes(status)) return res.status(400).json({ error: 'unknown status' });
+  if (!Number.isInteger(rowNum) || rowNum < 2) return res.status(400).json({ error: 'bad row' });
+  try {
+    const rows = await fetchManagerRows();
+    const current = rows[rowNum - 2];
+    if (!current || String(current[0]) !== String(orderNumber)) {
+      return res.status(409).json({ error: 'This order moved in the sheet — refresh and try again.' });
+    }
+    await withSessionLock('__sheets_manager_kitchen_write__', async () => {
+      await withTimeout(sheets.spreadsheets.values.update({
+        spreadsheetId: process.env.GOOGLE_SHEETS_ID,
+        range: `Manager!H${rowNum}`,
+        valueInputOption: 'USER_ENTERED',
+        requestBody: { values: [[status]] },
+      }), 6000);
+    });
+    managerRowsCache = null;
+    console.log(`Driver dashboard: order #${orderNumber} -> ${status}`);
+    await notifyStatusChange({
+      orderNumber: String(orderNumber), timestamp: current[1], status,
+      language: current[5], phoneCell: current[6],
+    });
+    res.json({ ok: true });
+  } catch (err) {
+    console.error('Driver status update failed:', err.message || err);
+    res.status(500).json({ error: 'could not update status' });
+  }
+});
+
+const DRIVER_HTML = `<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Deliveries — Créme De La Créme</title>
+<style>
+  :root { --bg:#12141a; --card:#1c1f28; --line:#2c3140; --text:#f2f4f8; --dim:#98a0b3;
+          --go:#22c55e; --out:#a855f7; --call:#3b82f6; }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--text);
+         font:16px/1.5 system-ui,-apple-system,Segoe UI,Roboto,sans-serif; }
+  header { position:sticky; top:0; background:var(--bg); border-bottom:1px solid var(--line);
+           padding:14px 18px; display:flex; align-items:center; gap:12px; z-index:5; }
+  h1 { font-size:19px; margin:0; font-weight:650; }
+  .count { background:var(--out); color:#fff; font-weight:700; border-radius:999px; padding:2px 11px; font-size:15px; }
+  .muted { color:var(--dim); font-size:13px; margin-left:auto; }
+  main { padding:14px; display:grid; gap:14px; grid-template-columns:repeat(auto-fill,minmax(320px,1fr)); }
+  .card { background:var(--card); border:1px solid var(--line); border-left:5px solid var(--out);
+          border-radius:12px; padding:15px; }
+  .top { display:flex; align-items:baseline; gap:10px; }
+  .num { font-size:22px; font-weight:700; }
+  .time { color:var(--dim); font-size:13px; margin-left:auto; }
+  .addr { font-size:16px; margin:10px 0 4px; white-space:pre-line; word-break:break-word; }
+  .land { background:#2a2416; border:1px solid #4a3f1f; color:#ffe2a8; border-radius:8px;
+          padding:9px 11px; font-size:14px; margin:8px 0; }
+  .items { color:var(--dim); font-size:14px; margin:8px 0; white-space:pre-line; }
+  .cash { font-size:17px; font-weight:700; margin-top:6px; }
+  .btns { display:flex; flex-wrap:wrap; gap:8px; margin-top:12px; }
+  a.btn, button { font:inherit; font-size:15px; font-weight:600; border:1px solid var(--line);
+    background:#252a36; color:var(--text); border-radius:9px; padding:11px 14px; cursor:pointer;
+    text-decoration:none; display:inline-block; min-height:46px; }
+  a.map { background:var(--call); color:#fff; border-color:transparent; }
+  a.call { background:#1e3a2b; color:#b7f5cf; border-color:#2f5a45; }
+  button.done { background:var(--go); color:#04210f; border-color:transparent; }
+  button.out { background:var(--out); color:#fff; border-color:transparent; }
+  .empty { color:var(--dim); text-align:center; padding:70px 20px; grid-column:1/-1; }
+  #login { max-width:340px; margin:16vh auto; padding:26px; background:var(--card);
+           border:1px solid var(--line); border-radius:12px; }
+  #login input { width:100%; font:inherit; padding:12px; margin:12px 0; border-radius:8px;
+                 border:1px solid var(--line); background:#161923; color:var(--text); }
+  #login button { width:100%; background:var(--go); color:#04210f; border-color:transparent; }
+  .err { color:#ff9b9b; font-size:14px; min-height:20px; }
+</style>
+</head>
+<body>
+<div id="login" hidden>
+  <h1>Driver Login</h1>
+  <input type="password" id="pw" placeholder="Password" autocomplete="current-password">
+  <button onclick="login()">Enter</button>
+  <div class="err" id="loginErr"></div>
+</div>
+<div id="app" hidden>
+  <header><h1>Deliveries</h1><span class="count" id="count">0</span><span class="muted" id="updated">—</span></header>
+  <main id="list"></main>
+</div>
+<script>
+function esc(s){ return String(s==null?'':s).replace(/[&<>"']/g,function(c){
+  return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];}); }
+
+function login(){
+  fetch('/driver/login',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({password:document.getElementById('pw').value})})
+   .then(function(r){ return r.ok?load():r.json().then(function(j){throw new Error(j.error||'failed');}); })
+   .catch(function(e){ document.getElementById('loginErr').textContent=e.message; });
+}
+
+function setStatus(rowNum,orderNumber,status,btn){
+  btn.disabled=true;
+  fetch('/driver/status',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({rowNum:rowNum,orderNumber:orderNumber,status:status})})
+   .then(function(r){ return r.json().then(function(j){ if(!r.ok) throw new Error(j.error||'failed'); }); })
+   .then(load)
+   .catch(function(e){ alert(e.message); btn.disabled=false; });
+}
+
+function load(){
+  return fetch('/driver/orders').then(function(r){
+    if(r.status===401){ document.getElementById('login').hidden=false;
+      document.getElementById('app').hidden=true; throw new Error('auth'); }
+    return r.json();
+  }).then(function(d){
+    document.getElementById('login').hidden=true;
+    document.getElementById('app').hidden=false;
+    var list=document.getElementById('list'); list.innerHTML='';
+    var os=d.orders||[];
+    document.getElementById('count').textContent=os.length;
+    document.getElementById('updated').textContent='updated '+new Date().toLocaleTimeString();
+    if(!os.length){ list.innerHTML='<div class="empty">No deliveries right now.</div>'; return; }
+    os.forEach(function(o){
+      var el=document.createElement('div'); el.className='card';
+      var tel=String(o.phone||'').replace(/[^0-9+]/g,'');
+      el.innerHTML='<div class="top"><span class="num">#'+esc(o.orderNumber)+'</span>'+
+        '<span class="time">'+esc(o.timestamp)+'</span></div>'+
+        '<div class="addr">📍 '+esc(o.address)+'</div>'+
+        (o.landmark?'<div class="land">🏠 '+esc(o.landmark)+'</div>':'')+
+        '<div class="items">'+esc(o.items)+'</div>'+
+        '<div class="cash">💵 Collect $'+esc(o.total)+'</div>'+
+        '<div class="btns">'+
+          '<a class="btn map" target="_blank" rel="noopener" href="'+esc(o.mapsLink)+'">🗺️ Navigate</a>'+
+          (tel?'<a class="btn call" href="tel:'+esc(tel)+'">📞 Call</a>':'')+
+        '</div><div class="btns" id="s'+esc(o.orderNumber)+'"></div>';
+      var sb=el.querySelector('#s'+o.orderNumber);
+      if(o.status!=='Out for Delivery'){
+        var b1=document.createElement('button'); b1.className='out'; b1.textContent='🏍️ Picked up';
+        b1.onclick=function(){ setStatus(o.rowNum,o.orderNumber,'Out for Delivery',b1); }; sb.appendChild(b1);
+      }
+      var b2=document.createElement('button'); b2.className='done'; b2.textContent='✅ Delivered';
+      b2.onclick=function(){ setStatus(o.rowNum,o.orderNumber,'Completed',b2); }; sb.appendChild(b2);
+      list.appendChild(el);
+    });
+    document.title=(os.length?'('+os.length+') ':'')+'Deliveries';
+  }).catch(function(e){ if(e.message!=='auth') console.error(e); });
+}
+load(); setInterval(load,15000);
+document.getElementById('pw').addEventListener('keydown',function(e){ if(e.key==='Enter') login(); });
+</script>
+</body>
+</html>`;
+
+app.get('/driver', (req, res) => {
+  if (!process.env.DRIVER_PASSWORD) {
+    return res.status(503).send('Driver dashboard is not configured — set DRIVER_PASSWORD in the environment.');
+  }
+  res.type('html').send(DRIVER_HTML);
+});
+
 // ---- MANAGER DASHBOARD ----
 // Everything the kitchen view deliberately leaves out: money, history,
 // customers, menu availability. Behind its OWN password, not the kitchen
@@ -4978,6 +5212,7 @@ const MANAGER_HTML = `<!doctype html>
     <span class="tabs">
       <button class="tab on" data-tab="overview" onclick="showTab('overview')">Overview</button>
       <button class="tab" data-tab="menu" onclick="showTab('menu')">Menu</button>
+      <button class="tab" data-tab="live" onclick="showTab('live')">Live</button>
       <button class="tab" data-tab="customers" onclick="showTab('customers')">Customers</button>
     </span>
     <span class="muted" id="updated">—</span>
@@ -4995,6 +5230,11 @@ const MANAGER_HTML = `<!doctype html>
     <section id="tab-menu" hidden>
       <h2>Menu — tap to edit price or mark sold out</h2>
       <div id="menu"></div>
+    </section>
+
+    <section id="tab-live" hidden>
+      <h2>Customers talking to the bot right now</h2>
+      <div id="live"></div>
     </section>
 
     <section id="tab-customers" hidden>
@@ -5064,14 +5304,44 @@ var currentTab='overview', paused=false;
 
 function showTab(t){
   currentTab=t;
-  ['overview','menu','customers'].forEach(function(x){
+  ['overview','menu','live','customers'].forEach(function(x){
     document.getElementById('tab-'+x).hidden = (x!==t);
   });
   document.querySelectorAll('.tab').forEach(function(b){
     b.classList.toggle('on', b.getAttribute('data-tab')===t);
   });
   if(t==='menu') loadMenu();
+  if(t==='live') loadLive();
   if(t==='customers') loadCustomers();
+}
+
+function loadLive(){
+  fetch('/manager/live').then(function(r){return r.json();}).then(function(d){
+    var el=document.getElementById('live');
+    if(!(d.live||[]).length){
+      el.innerHTML='<div class="empty">Nobody is mid-conversation right now.'+
+        (d.savedCarts?' ('+d.savedCarts+' saved cart(s) waiting to resume.)':'')+'</div>';
+      return;
+    }
+    el.innerHTML=d.live.map(function(s){
+      var flag = s.escalation>=3 ? '<span class="pill off">ESCALATED</span>'
+               : s.frustration>=3 ? '<span class="pill off">FRUSTRATED</span>'
+               : s.parseFailures>=2 ? '<span class="pill off">STUCK</span>' : '';
+      var idle = s.idleSeconds<60 ? s.idleSeconds+'s' : Math.round(s.idleSeconds/60)+'m';
+      var convo = (s.recent||[]).map(function(t){
+        return '<div class="lbl" style="margin:2px 0"><strong>'+(t.role==='customer'?'👤':'🤖')+'</strong> '+
+          esc(String(t.text||'').slice(0,110))+'</div>';
+      }).join('');
+      return '<div class="row" style="display:block">'+
+        '<div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">'+
+          '<strong>'+esc(s.phone)+'</strong> '+flag+
+          '<span class="lbl">step: '+esc(s.step)+' · '+esc(s.language)+' · idle '+idle+
+          (s.cartLines?' · cart '+s.cartLines+' item(s) $'+esc(s.cartTotal):'')+
+          (s.pendingResume?' · awaiting resume':'')+'</span>'+
+        '</div>'+(convo?'<div style="margin-top:8px">'+convo+'</div>':'')+
+      '</div>';
+    }).join('');
+  }).catch(function(e){ console.error(e); });
 }
 
 function togglePause(){
@@ -5133,7 +5403,10 @@ function loadCustomers(){
 }
 
 load();
-setInterval(function(){ if(currentTab==='overview') load(); }, 30000);
+setInterval(function(){
+  if(currentTab==='overview') load();
+  if(currentTab==='live') loadLive();   // live view is only useful if it's actually live
+}, 15000);
 document.getElementById('pw').addEventListener('keydown',function(e){ if(e.key==='Enter') login(); });
 </script>
 </body>
@@ -5155,6 +5428,37 @@ app.get('/manager/menu', (req, res) => {
     })),
   }));
   res.json({ categories });
+});
+
+// Who is talking to the bot RIGHT NOW. This data lives only in memory —
+// it's in no sheet and nowhere else visible — so a stuck or frustrated
+// customer is otherwise invisible until they give up. Manager auth: it
+// exposes live conversation transcripts.
+app.get('/manager/live', (req, res) => {
+  if (!requireManagerAuth(req, res)) return;
+  const now = Date.now();
+  const live = Object.entries(sessions).map(([phone, s]) => ({
+    phone,
+    step: s.step,
+    language: s.language || '—',
+    cartLines: s.cart.length,
+    cartTotal: cartTotal(s.cart).toFixed(2),
+    idleSeconds: Math.round((now - (s.lastMessageAt || now)) / 1000),
+    frustration: s.frustrationScore || 0,
+    escalation: s.escalationStage || 0,
+    parseFailures: s.parseFailureStreak || 0,
+    pendingResume: Boolean(s.pendingResume),
+    // Last few turns only — enough to see what they're stuck on without
+    // dumping a whole conversation into the page.
+    recent: (s.transcript || []).slice(-6),
+  }));
+  // Most likely to need help first: escalated, then frustrated, then stuck.
+  live.sort((a, b) =>
+    (b.escalation - a.escalation) ||
+    (b.frustration - a.frustration) ||
+    (b.parseFailures - a.parseFailures) ||
+    (a.idleSeconds - b.idleSeconds));
+  res.json({ live, savedCarts: Object.keys(savedCarts).length });
 });
 
 app.get('/manager/customers', (req, res) => {
