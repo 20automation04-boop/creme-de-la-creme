@@ -1,0 +1,21 @@
+{
+  "name": "name-one-amount-and-say-the-rest-for-everything-else",
+  "from": "19990000037",
+  "turns": [
+    { "in": "1", "expectStep": "menu" },
+    { "in": "1", "expectStep": "item" },
+    { "comment": "Vanilla Bean", "in": "1", "expectStep": "item", "expectCartLength": 1 },
+    { "comment": "Chocolate", "in": "3", "expectStep": "item", "expectCartLength": 2 },
+    { "comment": "Piña Colada", "in": "5", "expectStep": "item", "expectCartLength": 3 },
+    { "in": "done", "expectStep": "qtyrecap" },
+    {
+      "comment": "one item named explicitly, everything else covered by 'the rest' instead of defaulting to 1",
+      "in": "2 vanilla and 3 of the rest",
+      "expectStep": "mode",
+      "expectCartLength": 3,
+      "expectCartTotal": 56
+    },
+    { "in": "pickup", "expectStep": "confirm" },
+    { "in": "yes", "expectStep": "menu", "expectReplyContains": "confirmed!" }
+  ]
+}

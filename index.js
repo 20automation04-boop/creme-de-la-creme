@@ -1618,9 +1618,9 @@ Need help? Type *help* anytime.`,
     askQty: (name, price, max) => `${name} - $${price}\nHow many would you like? (1-${max}, or 0 to go back)`,
     addedOne: (name) => `Added ✅ ${name}`,
     qtyRecapHeader: "Here's everything you picked 👇",
-    qtyRecapAsk: 'How many of each? Tap *1 of each*, or reply with amounts — like *2 banana, 3 vanilla*. You can say *large* too.',
+    qtyRecapAsk: 'How many of each? Tap *1 of each*, or reply with amounts — like *2 banana, 3 vanilla*, or *2 banana and 3 of the rest*. You can say *large* too.',
     qtyEachButton: '1 of each ✅',
-    qtyRecapUnclear: "Sorry, I didn't catch those amounts. Tap *1 of each*, or reply like *2 banana, 3 vanilla*.",
+    qtyRecapUnclear: "Sorry, I didn't catch those amounts. Tap *1 of each*, or reply like *2 banana, 3 vanilla* or *2 banana and 3 of the rest*.",
     invalidQty: (max) => `That doesn't look like a valid quantity — try a number between 1 and ${max}.`,
     askSize: (name, sizes) => `${name} — choose a size:\n${sizes.map(s => `${s.key}. ${s.label} - $${s.price.toFixed(2)}`).join('\n')}\n\n0. Back`,
     invalidSize: 'Can you double check that size number and try again?',
@@ -1724,9 +1724,9 @@ Need help? Type *help* anytime.`,
     askQty: (name, price, max) => `${name} - $${price}\n¿Cuántos quieres? (1-${max}, o 0 para volver)`,
     addedOne: (name) => `Añadido ✅ ${name}`,
     qtyRecapHeader: 'Esto es lo que elegiste 👇',
-    qtyRecapAsk: '¿Cuántos de cada uno? Toca *1 de cada*, o responde con cantidades — como *2 banana, 3 vainilla*. También puedes decir *grande*.',
+    qtyRecapAsk: '¿Cuántos de cada uno? Toca *1 de cada*, o responde con cantidades — como *2 banana, 3 vainilla*, o *2 banana y 3 del resto*. También puedes decir *grande*.',
     qtyEachButton: '1 de cada ✅',
-    qtyRecapUnclear: 'No entendí esas cantidades. Toca *1 de cada*, o responde como *2 banana, 3 vainilla*.',
+    qtyRecapUnclear: 'No entendí esas cantidades. Toca *1 de cada*, o responde como *2 banana, 3 vainilla* o *2 banana y 3 del resto*.',
     invalidQty: (max) => `Esa cantidad no es válida — intenta un número entre 1 y ${max}.`,
     askSize: (name, sizes) => `${name} — elige un tamaño:\n${sizes.map(s => `${s.key}. ${s.label} - $${s.price.toFixed(2)}`).join('\n')}\n\n0. Volver`,
     invalidSize: '¿Puedes revisar el número de tamaño e intentar de nuevo?',
@@ -3501,12 +3501,20 @@ function applyQtyRecapReply(rawMsg, session, lang) {
   const segments = splitQtySegments(text);
   const claimed = new Set();
   let placed = 0;
+  // "3 of the rest" / "3 del resto" / "3 de los demás" — a blanket amount for
+  // every line not otherwise named in this same reply, e.g. "2 vanilla and
+  // 3 of the rest". Checked before item-name matching so "rest"/"resto" is
+  // never mistaken for an item.
+  let restQty = null;
+  const REST_RE = /\b(?:the\s+)?rest\b|\bremaining\b|\bothers?\b|\beverything\s+else\b|\bresto\b|\bdem[aá]s\b/;
 
   for (const seg of segments) {
     const qtyMatch = seg.match(/(\d+)/);
     if (!qtyMatch) continue;
     const qty = parseInt(qtyMatch[1], 10);
     if (!Number.isInteger(qty) || qty < 1 || qty > MAX_QTY) continue;
+
+    if (REST_RE.test(seg)) { restQty = qty; continue; }
 
     // Which line is this segment talking about?
     let target = -1;
@@ -3546,10 +3554,11 @@ function applyQtyRecapReply(rawMsg, session, lang) {
     if (leftover.length >= 3) line.note = leftover.slice(0, 60);
   }
 
-  if (placed === 0) return 0;
-  // Anything they did not mention is one of.
-  cart.forEach(line => { if (!line.qtyExplicit) { line.qty = 1; line.qtyExplicit = true; } });
-  return placed;
+  if (placed === 0 && restQty === null) return 0;
+  // Anything they did not mention is one of — unless they gave a blanket
+  // amount for "the rest", in which case that applies instead of 1.
+  cart.forEach(line => { if (!line.qtyExplicit) { line.qty = restQty !== null ? restQty : 1; line.qtyExplicit = true; } });
+  return placed + (restQty !== null ? 1 : 0);
 }
 
 // Shared by the 'menu' and 'item' steps' "done"/checkout handling — the
