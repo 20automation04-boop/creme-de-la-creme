@@ -183,6 +183,19 @@ async function sendReply(res, to, textOrMessages) {
   }
 }
 
+// Public base URL for the dashboards, used to put a tap-through link in
+// staff notifications. Railway injects RAILWAY_PUBLIC_DOMAIN automatically,
+// so this normally needs no configuration; PUBLIC_BASE_URL overrides it if
+// the bot ever moves behind a custom domain. Empty = links are simply
+// omitted from notifications rather than sending a broken URL.
+const PUBLIC_BASE_URL = (process.env.PUBLIC_BASE_URL
+  || (process.env.RAILWAY_PUBLIC_DOMAIN ? `https://${process.env.RAILWAY_PUBLIC_DOMAIN}` : '')
+).replace(/\/+$/, '');
+
+function dashboardLink(path) {
+  return PUBLIC_BASE_URL ? `${PUBLIC_BASE_URL}${path}` : '';
+}
+
 // ---- DELIVERY DRIVER NOTIFICATION ----
 // EDIT THIS: add real driver WhatsApp number(s) as bare digits with country
 // code, NO '+' and NO 'whatsapp:' prefix (e.g. '5016256563').
@@ -349,9 +362,35 @@ async function notifyDriver(orderNumber, session, from) {
     ? (session.language === 'es' ? `\n🏠 *Cómo encontrarlo:* ${session.deliveryNote}` : `\n🏠 *Finding it:* ${session.deliveryNote}`)
     : '';
 
+  // This message has to work COMPLETELY on its own — a driver should never
+  // need the dashboard to do the job, it's just a convenience.
+  //
+  // A shared location already carries a maps URL inside session.address; a
+  // TYPED address carries nothing tappable, which left the driver copying
+  // text into Maps by hand. Add a geocoded link in that case only, so a pin
+  // is never overridden by a worse guess and the link isn't duplicated.
+  const hasLink = /https?:\/\//.test(session.address || '');
+  const mapsUrl = hasLink
+    ? ''
+    : `https://maps.google.com/?q=${encodeURIComponent(String(session.address || '').replace(/\s+/g, ' ').trim())}`;
+  const mapTag = mapsUrl
+    ? (session.language === 'es' ? `\n🗺️ Navegar: ${mapsUrl}` : `\n🗺️ Navigate: ${mapsUrl}`)
+    : '';
+
+  const placed = new Date().toLocaleString('en-US', {
+    timeZone: SHOP_HOURS.timezone, dateStyle: 'short', timeStyle: 'short',
+  });
+  const timeTag = session.language === 'es' ? `\n🕐 *Hora:* ${placed}` : `\n🕐 *Placed:* ${placed}`;
+
+  // Appended last, after everything the driver actually needs.
+  const board = dashboardLink('/driver');
+  const boardTag = board
+    ? (session.language === 'es' ? `\n\n🗺️ Tablero (opcional): ${board}` : `\n\n🗺️ Driver board (optional): ${board}`)
+    : '';
+
   const message = preorderTag + (session.language === 'es'
-    ? `🏍️ *NUEVA ORDEN DE ENTREGA #${orderNumber}*\n${divider}\n🛍️ *Artículos:*\n${itemLines}\n${divider}\n💵 *Total a cobrar: $${total} BZD*\n\n📍 *Entregar a:*\n${session.address}${findMeTag}\n📞 *Teléfono del cliente:* +${from}${noteTag}`
-    : `🏍️ *NEW DELIVERY ORDER #${orderNumber}*\n${divider}\n🛍️ *Items:*\n${itemLines}\n${divider}\n💵 *Total to collect: $${total} BZD*\n\n📍 *Deliver to:*\n${session.address}${findMeTag}\n📞 *Customer phone:* +${from}${noteTag}`);
+    ? `🏍️ *NUEVA ORDEN DE ENTREGA #${orderNumber}*${timeTag}\n${divider}\n🛍️ *Artículos:*\n${itemLines}\n${divider}\n💵 *Total a cobrar: $${total} BZD* (efectivo)\n\n📍 *Entregar a:*\n${session.address}${findMeTag}${mapTag}\n📞 *Teléfono del cliente:* +${from}${noteTag}${boardTag}`
+    : `🏍️ *NEW DELIVERY ORDER #${orderNumber}*${timeTag}\n${divider}\n🛍️ *Items:*\n${itemLines}\n${divider}\n💵 *Total to collect: $${total} BZD* (cash)\n\n📍 *Deliver to:*\n${session.address}${findMeTag}${mapTag}\n📞 *Customer phone:* +${from}${noteTag}${boardTag}`);
 
   await notifyAllDrivers(message);
 }
@@ -371,7 +410,11 @@ async function notifyOwnerOfPickupOrder(orderNumber, session, from) {
   const note = getCustomerNote(from);
   const noteTag = note ? `\n\n⚠️ *Customer note:* ${note}` : '';
 
-  const message = preorderTag + `📦 *NEW PICKUP ORDER #${orderNumber}*\n${divider}\n🛍️ *Items:*\n${itemLines}\n${divider}\n💵 *Total: $${total} BZD*\n\n📞 *Customer phone:* +${from}${noteTag}`;
+  // Pickup orders are worked from the kitchen board, so that's the link here.
+  const board = dashboardLink('/kitchen');
+  const boardTag = board ? `\n\n👨‍🍳 Open kitchen board: ${board}` : '';
+
+  const message = preorderTag + `📦 *NEW PICKUP ORDER #${orderNumber}*\n${divider}\n🛍️ *Items:*\n${itemLines}\n${divider}\n💵 *Total: $${total} BZD*\n\n📞 *Customer phone:* +${from}${noteTag}${boardTag}`;
 
   await notifyOwners(message);
 }
