@@ -5023,11 +5023,20 @@ const DRIVER_HTML = `<!doctype html>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Deliveries — Créme De La Créme</title>
 <style>
-  :root { --bg:#12141a; --card:#1c1f28; --line:#2c3140; --text:#f2f4f8; --dim:#98a0b3;
-          --go:#22c55e; --out:#a855f7; --call:#3b82f6; }
+  /* DAY is the default. This screen is read outdoors in direct Belize sun
+     far more often than anywhere else, and a dark UI is close to unreadable
+     there — bright background plus near-black text is what survives glare.
+     NIGHT is one tap away for evening runs and is remembered per device. */
+  :root { --bg:#ffffff; --card:#ffffff; --line:#c7ccd6; --text:#0b0d12; --dim:#4a5160;
+          --go:#15803d; --out:#7c3aed; --call:#1d4ed8; --land-bg:#fff8e1;
+          --land-line:#d9a400; --land-text:#4a3600; --shadow:0 1px 3px rgba(0,0,0,.14); }
+  :root[data-theme="night"] { --bg:#12141a; --card:#1c1f28; --line:#2c3140; --text:#f2f4f8;
+          --dim:#98a0b3; --go:#22c55e; --out:#a855f7; --call:#3b82f6; --land-bg:#2a2416;
+          --land-line:#4a3f1f; --land-text:#ffe2a8; --shadow:none; }
   * { box-sizing:border-box; }
   body { margin:0; background:var(--bg); color:var(--text);
-         font:16px/1.5 system-ui,-apple-system,Segoe UI,Roboto,sans-serif; }
+         font:16px/1.5 system-ui,-apple-system,Segoe UI,Roboto,sans-serif;
+         -webkit-text-size-adjust:100%; }
   header { position:sticky; top:0; background:var(--bg); border-bottom:1px solid var(--line);
            padding:14px 18px; display:flex; align-items:center; gap:12px; z-index:5; }
   h1 { font-size:19px; margin:0; font-weight:650; }
@@ -5035,24 +5044,35 @@ const DRIVER_HTML = `<!doctype html>
   .muted { color:var(--dim); font-size:13px; margin-left:auto; }
   main { padding:14px; display:grid; gap:14px;
          grid-template-columns:repeat(auto-fill,minmax(min(320px,100%),1fr)); }
-  .card { background:var(--card); border:1px solid var(--line); border-left:5px solid var(--out);
-          border-radius:12px; padding:15px; }
+  .card { background:var(--card); border:1px solid var(--line); border-left:6px solid var(--out);
+          border-radius:12px; padding:15px; box-shadow:var(--shadow); }
   .top { display:flex; align-items:baseline; gap:10px; }
-  .num { font-size:22px; font-weight:700; }
+  /* Everything below is a size or weight up from the other dashboards —
+     this one gets read at arm's length, in motion, through glare. */
+  .num { font-size:25px; font-weight:800; }
   .time { color:var(--dim); font-size:13px; margin-left:auto; }
-  .addr { font-size:16px; margin:10px 0 4px; white-space:pre-line; word-break:break-word; }
-  .land { background:#2a2416; border:1px solid #4a3f1f; color:#ffe2a8; border-radius:8px;
-          padding:9px 11px; font-size:14px; margin:8px 0; }
-  .items { color:var(--dim); font-size:14px; margin:8px 0; white-space:pre-line; }
-  .cash { font-size:17px; font-weight:700; margin-top:6px; }
+  .addr { font-size:19px; font-weight:600; margin:10px 0 4px; white-space:pre-line;
+          word-break:break-word; line-height:1.35; }
+  .land { background:var(--land-bg); border:1px solid var(--land-line); color:var(--land-text);
+          border-radius:8px; padding:10px 12px; font-size:15px; font-weight:600; margin:9px 0; }
+  .items { color:var(--dim); font-size:15px; margin:8px 0; white-space:pre-line; }
+  .cash { font-size:21px; font-weight:800; margin-top:8px; }
   .btns { display:flex; flex-wrap:wrap; gap:8px; margin-top:12px; }
-  a.btn, button { font:inherit; font-size:15px; font-weight:600; border:1px solid var(--line);
-    background:#252a36; color:var(--text); border-radius:9px; padding:11px 14px; cursor:pointer;
-    text-decoration:none; display:inline-block; min-height:46px; }
+  /* Solid fills with white text in BOTH themes — a tinted-background button
+     that looks fine indoors washes out completely in sunlight. */
+  a.btn, button { font:inherit; font-size:16px; font-weight:700; border:1px solid var(--line);
+    background:var(--card); color:var(--text); border-radius:9px; padding:12px 15px; cursor:pointer;
+    text-decoration:none; display:inline-block; min-height:48px; }
   a.map { background:var(--call); color:#fff; border-color:transparent; }
-  a.call { background:#1e3a2b; color:#b7f5cf; border-color:#2f5a45; }
-  button.done { background:var(--go); color:#04210f; border-color:transparent; }
+  a.call { background:var(--go); color:#fff; border-color:transparent; }
+  button.done { background:var(--go); color:#fff; border-color:transparent; }
   button.out { background:var(--out); color:#fff; border-color:transparent; }
+  .card.flash { animation:flash 1s ease-in-out 3; }
+  @keyframes flash { 0%,100%{ background:var(--card);} 50%{ background:#ffe9b3;} }
+  :root[data-theme="night"] .card.flash { animation-name:flashNight; }
+  @keyframes flashNight { 0%,100%{ background:var(--card);} 50%{ background:#3a2f12;} }
+  #theme { background:var(--card); color:var(--text); min-height:40px; padding:8px 12px;
+           font-size:15px; }
   .empty { color:var(--dim); text-align:center; padding:70px 20px; grid-column:1/-1; }
   #login { max-width:340px; margin:16vh auto; padding:26px; background:var(--card);
            border:1px solid var(--line); border-radius:12px; }
@@ -5083,12 +5103,50 @@ const DRIVER_HTML = `<!doctype html>
   <div class="err" id="loginErr"></div>
 </div>
 <div id="app" hidden>
-  <header><h1>Deliveries</h1><span class="count" id="count">0</span><span class="muted" id="updated">—</span></header>
+  <header>
+    <h1>Deliveries</h1><span class="count" id="count">0</span>
+    <button id="theme" onclick="toggleTheme()">🌙 Night</button>
+    <span class="muted" id="updated">—</span>
+  </header>
   <main id="list"></main>
 </div>
 <script>
 function esc(s){ return String(s==null?'':s).replace(/[&<>"']/g,function(c){
   return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];}); }
+
+// Day by default (see the CSS note); the choice sticks per device.
+function applyTheme(t){
+  if(t==='night') document.documentElement.setAttribute('data-theme','night');
+  else document.documentElement.removeAttribute('data-theme');
+  var b=document.getElementById('theme');
+  if(b) b.textContent = t==='night' ? '☀️ Day' : '🌙 Night';
+}
+function toggleTheme(){
+  var next = document.documentElement.getAttribute('data-theme')==='night' ? 'day' : 'night';
+  try { localStorage.setItem('driverTheme', next); } catch(e){}
+  applyTheme(next);
+}
+try { applyTheme(localStorage.getItem('driverTheme') || 'day'); } catch(e){ applyTheme('day'); }
+
+// A driver isn't watching this screen — they're riding. New deliveries get
+// the same audible + visual alert the kitchen board uses, so the dashboard
+// works standalone rather than only as a companion to the WhatsApp ping.
+var seenDeliveries = null;
+function beep(){
+  try {
+    var ctx = new (window.AudioContext || window.webkitAudioContext)();
+    [0,0.28].forEach(function(off){
+      var o=ctx.createOscillator(), g=ctx.createGain();
+      o.connect(g); g.connect(ctx.destination);
+      o.frequency.value=920; o.type='sine';
+      g.gain.setValueAtTime(0.0001, ctx.currentTime+off);
+      g.gain.exponentialRampToValueAtTime(0.34, ctx.currentTime+off+0.02);
+      g.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime+off+0.24);
+      o.start(ctx.currentTime+off); o.stop(ctx.currentTime+off+0.26);
+    });
+  } catch(e){}
+  if (navigator.vibrate) { try { navigator.vibrate([200,90,200]); } catch(e){} }
+}
 
 function login(){
   fetch('/driver/login',{method:'POST',headers:{'Content-Type':'application/json'},
@@ -5118,9 +5176,20 @@ function load(){
     var os=d.orders||[];
     document.getElementById('count').textContent=os.length;
     document.getElementById('updated').textContent='updated '+new Date().toLocaleTimeString();
-    if(!os.length){ list.innerHTML='<div class="empty">No deliveries right now.</div>'; return; }
+    // Alert only on a delivery number we haven't seen before. seenDeliveries
+    // starts null so the very first load after opening the page is silent —
+    // otherwise every login would sound the alarm for existing work.
+    var ids = os.map(function(o){ return String(o.orderNumber); });
+    var fresh = seenDeliveries !== null && ids.some(function(id){ return seenDeliveries.indexOf(id)===-1; });
+    if (fresh) beep();
+    if(!os.length){
+      seenDeliveries = ids;
+      list.innerHTML='<div class="empty">No deliveries right now.</div>';
+      return;
+    }
     os.forEach(function(o){
-      var el=document.createElement('div'); el.className='card';
+      var isNew = seenDeliveries !== null && seenDeliveries.indexOf(String(o.orderNumber))===-1;
+      var el=document.createElement('div'); el.className='card'+(isNew?' flash':'');
       var tel=String(o.phone||'').replace(/[^0-9+]/g,'');
       el.innerHTML='<div class="top"><span class="num">#'+esc(o.orderNumber)+'</span>'+
         '<span class="time">'+esc(o.timestamp)+'</span></div>'+
@@ -5141,9 +5210,30 @@ function load(){
       b2.onclick=function(){ setStatus(o.rowNum,o.orderNumber,'Completed',b2); }; sb.appendChild(b2);
       list.appendChild(el);
     });
+    seenDeliveries = ids;
     document.title=(os.length?'('+os.length+') ':'')+'Deliveries';
   }).catch(function(e){ if(e.message!=='auth') console.error(e); });
 }
+// Keep the screen awake while this page is open, so a driver who props the
+// phone up during a shift keeps seeing (and hearing) new deliveries. This is
+// the honest limit of a web page: once the phone locks or the browser is
+// backgrounded, audio and timers are suspended by the OS and NO web alert
+// will fire. The reliable channel is the WhatsApp message notifyDriver
+// already sends on every delivery order — this dashboard is the working
+// surface (navigate, call, mark delivered), not the alarm.
+var wakeLock = null;
+async function keepAwake(){
+  try {
+    if ('wakeLock' in navigator && document.visibilityState === 'visible') {
+      wakeLock = await navigator.wakeLock.request('screen');
+    }
+  } catch(e){ /* unsupported or denied — nothing to do, page still works */ }
+}
+document.addEventListener('visibilitychange', function(){
+  if (document.visibilityState === 'visible') { keepAwake(); load(); }
+});
+keepAwake();
+
 load(); setInterval(load,15000);
 document.getElementById('pw').addEventListener('keydown',function(e){ if(e.key==='Enter') login(); });
 </script>
