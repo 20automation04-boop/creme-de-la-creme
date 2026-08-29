@@ -3,7 +3,7 @@
   "from": "19990000101",
   "turns": [
     {
-      "in": "hi",
+      "in": "1",
       "expectStep": "menu"
     },
     {
