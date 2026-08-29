@@ -300,6 +300,95 @@ test('manager pause toggle round-trips', async () => {
   assert.equal(off.json.ordersPaused, false, 'and must be reversible');
 });
 
+// ---- promos -----------------------------------------------------------
+// Drives real customer messages through processWhatsAppMessage (in-process,
+// not HTTP) so opt-in state is genuine rather than hand-inserted — and so
+// this bypasses nothing the webhook signature check would otherwise gate.
+let promoMsgId = 0;
+function fakeRes() { return { headersSent: false, sendStatus() { this.headersSent = true; } }; }
+function customerMsg(from, text) {
+  return bot.processWhatsAppMessage({ from, id: `promo-test-${++promoMsgId}`, type: 'text', text: { body: text } }, fakeRes());
+}
+// customerProfiles persists for the life of the module — without this, an
+// opted-in customer from an earlier test would still be in the list and
+// silently inflate/skew a later test's "opted-in count" or send total.
+function resetCustomerProfiles() {
+  for (const k of Object.keys(bot.customerProfiles)) delete bot.customerProfiles[k];
+}
+
+test('deals/ofertas opts a customer in with their language, stop deals opts out', async () => {
+  resetCustomerProfiles();
+  const enPhone = '19995550001', esPhone = '19995550002';
+  await customerMsg(enPhone, '1');       // English
+  await customerMsg(enPhone, 'deals');
+  await customerMsg(esPhone, '2');       // Español
+  await customerMsg(esPhone, 'ofertas');
+
+  const cookie = await loginAs('manager', 'manager-test-pw');
+  const custRes = await req('GET', '/manager/customers', { cookie });
+  const en = custRes.json.customers.find(c => c.phone === enPhone);
+  const es = custRes.json.customers.find(c => c.phone === esPhone);
+  assert.equal(en.promoOptIn, true);
+  assert.equal(en.language, 'en');
+  assert.equal(es.promoOptIn, true);
+  assert.equal(es.language, 'es', 'language is captured at opt-in time, not assumed');
+
+  await customerMsg(enPhone, 'stop deals');
+  const after = await req('GET', '/manager/customers', { cookie });
+  assert.equal(after.json.customers.find(c => c.phone === enPhone).promoOptIn, false,
+    'stop deals must actually flip the flag, not just reply politely');
+  assert.equal(after.json.customers.find(c => c.phone === esPhone).promoOptIn, true,
+    'opting one customer out must not affect another');
+});
+
+test('promo send: validated, opted-in only, per-customer language, and never blast-sends a stranger', async () => {
+  resetCustomerProfiles();
+  const inPhone = '19995550011', outPhone = '19995550012';
+  await customerMsg(inPhone, '1');
+  await customerMsg(inPhone, 'deals');
+  await customerMsg(outPhone, '1'); // never opts in — must not receive anything
+
+  const cookie = await loginAs('manager', 'manager-test-pw');
+
+  const unauth = await req('GET', '/manager/promo');
+  assert.equal(unauth.status, 401);
+
+  const empty = await req('POST', '/manager/promo/send', { cookie, body: { textEn: '', textEs: '' } });
+  assert.equal(empty.status, 400, 'sending nothing must be rejected');
+
+  const badUrl = await req('POST', '/manager/promo/send',
+    { cookie, body: { textEn: 'hi', mediaUrl: 'javascript:alert(1)' } });
+  assert.equal(badUrl.status, 400, 'a non-https media URL must be rejected');
+
+  bot.dryRunSent.length = 0;
+  const ok = await req('POST', '/manager/promo/send',
+    { cookie, body: { textEn: '20% off today!', textEs: '' } });
+  assert.equal(ok.status, 200);
+  assert.equal(ok.json.sent, 1, 'exactly the one opted-in customer is reached');
+  assert.equal(bot.dryRunSent.length, 1, 'nobody who did not opt in receives anything');
+  assert.equal(bot.dryRunSent[0].to, inPhone);
+  assert.match(bot.dryRunSent[0].message, /20% off today!/);
+
+  const status = await req('GET', '/manager/promo', { cookie });
+  assert.equal(status.json.optedIn, 1);
+  assert.ok(status.json.lastResult, 'the send is remembered for the dashboard to show');
+  assert.equal(status.json.lastResult.sent, 1);
+});
+
+test('promo falls back to the English text for a customer with no ES version written', async () => {
+  resetCustomerProfiles();
+  const esPhone = '19995550021';
+  await customerMsg(esPhone, '2');
+  await customerMsg(esPhone, 'ofertas');
+
+  const cookie = await loginAs('manager', 'manager-test-pw');
+  bot.dryRunSent.length = 0;
+  await req('POST', '/manager/promo/send', { cookie, body: { textEn: 'English only promo', textEs: '' } });
+  assert.equal(bot.dryRunSent.length, 1);
+  assert.match(bot.dryRunSent[0].message, /English only promo/,
+    'a Spanish customer must still receive something rather than nothing when ES is left blank');
+});
+
 // ---- shared UI contract ---------------------------------------------------
 test('every dashboard page is themeable and mobile-ready', async () => {
   for (const board of ['kitchen', 'manager', 'driver']) {

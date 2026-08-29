@@ -39,12 +39,12 @@ async function main() {
 
   await sheets.spreadsheets.values.update({
     spreadsheetId: process.env.GOOGLE_SHEETS_ID,
-    range: 'Customers!A1:D1',
+    range: 'Customers!A1:F1',
     valueInputOption: 'RAW',
-    requestBody: { values: [['Phone', 'SavedAddress', 'Notes', 'UpdatedAt']] },
+    requestBody: { values: [['Phone', 'SavedAddress', 'Notes', 'UpdatedAt', 'PromoOptIn', 'Language']] },
   });
 
-  console.log('✅ Customers tab created with headers (Phone, SavedAddress, Notes, UpdatedAt).');
+  console.log('✅ Customers tab created with headers (Phone, SavedAddress, Notes, UpdatedAt, PromoOptIn, Language).');
   console.log('   The bot fills this in on its own — a customer\'s delivery address is saved');
   console.log('   automatically the first time they type one in, and *note <text>* / *nota <texto>*');
   console.log('   lets them save an allergy or preference note. Both show up to staff when relevant');

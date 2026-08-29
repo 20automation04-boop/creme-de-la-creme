@@ -1327,15 +1327,19 @@ async function refreshCustomerProfiles() {
   try {
     const res = await withTimeout(sheets.spreadsheets.values.get({
       spreadsheetId: process.env.GOOGLE_SHEETS_ID,
-      range: 'Customers!A2:D',
+      range: 'Customers!A2:F',
     }), 8000);
     const rows = res.data.values || [];
     const next = {};
     for (const row of rows) {
-      const [phoneCell, savedAddress, notes, updatedAt] = row;
+      const [phoneCell, savedAddress, notes, updatedAt, promoOptIn, language] = row;
       const phone = normalizePhoneDigits(phoneCell);
       if (!phone) continue;
-      next[phone] = { savedAddress: savedAddress || '', notes: notes || '', updatedAt: updatedAt || '' };
+      next[phone] = {
+        savedAddress: savedAddress || '', notes: notes || '', updatedAt: updatedAt || '',
+        promoOptIn: String(promoOptIn || '').trim().toUpperCase() === 'TRUE',
+        language: language === 'es' ? 'es' : language === 'en' ? 'en' : '',
+      };
     }
     customerProfiles = next;
     jobSucceeded('refreshCustomerProfiles');
@@ -1362,15 +1366,18 @@ async function saveCustomerProfile(from, fields) {
   await withSessionLock('__sheets_customers_write__', async () => {
     const res = await withTimeout(sheets.spreadsheets.values.get({
       spreadsheetId: process.env.GOOGLE_SHEETS_ID,
-      range: 'Customers!A2:D',
+      range: 'Customers!A2:F',
     }), 8000);
     const rows = res.data.values || [];
     const rowIndex = rows.findIndex(r => normalizePhoneDigits(r[0]) === String(from));
-    const rowValues = [`'+${from}`, sheetSafe(merged.savedAddress), sheetSafe(merged.notes), merged.updatedAt];
+    const rowValues = [
+      `'+${from}`, sheetSafe(merged.savedAddress), sheetSafe(merged.notes), merged.updatedAt,
+      merged.promoOptIn ? 'TRUE' : 'FALSE', merged.language || '',
+    ];
     const rowNum = rowIndex >= 0 ? rowIndex + 2 : rows.length + 2; // +2: range starts at row 2 (header is row 1)
     await withTimeout(sheets.spreadsheets.values.update({
       spreadsheetId: process.env.GOOGLE_SHEETS_ID,
-      range: `Customers!A${rowNum}:D${rowNum}`,
+      range: `Customers!A${rowNum}:F${rowNum}`,
       valueInputOption: 'USER_ENTERED',
       requestBody: { values: [rowValues] },
     }), 6000);
@@ -1614,7 +1621,8 @@ Need help? Type *help* anytime.`,
 *status* = check your last order's status
 *agent* = talk to a real person
 *help* = show these instructions again
-*lang* = change language`,
+*lang* = change language
+*deals* = get our promos & deals`,
     menuButtonPrompt: 'Tap below whenever you\'re ready to see the menu 👇',
     menuButtonTitle: 'View Menu 📋',
     mainMenu: (menuList) => `🍧 *Créme De La Créme* 🍧\nReply with a number, or type your order:\n\n${menuList}\n\n*cart* = view order   *done* = checkout   *help* = instructions`,
@@ -1639,6 +1647,8 @@ Need help? Type *help* anytime.`,
     noneButtonTitle: 'None ✅',
     helpButtonTitle: 'How to order 💡',
     quickCommands: 'You can also just type:\n*menu* — see the menu\n*cart* — see your order\n*done* — checkout\n*repeat* — reorder your last order\n*agent* — talk to a person',
+    promoOptedIn: "🎉 You're in! We'll send you our deals and promos every now and then. Reply *stop deals* anytime to opt out.",
+    promoOptedOut: "Got it — no more deals or promos. Type *deals* anytime if you change your mind. 👍",
     askDeliveryNote: "🏠 Anything that helps our driver find you? A landmark, gate colour, house number — you can type it, send a voice note 🎙️, or even a photo 📷 of the place.\n\nTap *Skip* if it's easy to find.",
     skipButtonTitle: 'Skip ⏭️',
     deliveryNoteSaved: "Got it — I'll pass that to the driver. 🏍️",
@@ -1720,7 +1730,8 @@ Need help? Type *help* anytime.`,
 *estado* = ver el estado de tu última orden
 *agente* = hablar con una persona real
 *ayuda* = ver estas instrucciones otra vez
-*idioma* = cambiar idioma`,
+*idioma* = cambiar idioma
+*ofertas* = recibir nuestras ofertas y promos`,
     menuButtonPrompt: 'Toca abajo cuando quieras ver el menú 👇',
     menuButtonTitle: 'Ver Menú 📋',
     mainMenu: (menuList) => `🍧 *Créme De La Créme* 🍧\nResponde con un número, o escribe tu orden:\n\n${menuList}\n\n*carrito* = ver orden   *listo* = finalizar   *ayuda* = instrucciones`,
@@ -1745,6 +1756,8 @@ Need help? Type *help* anytime.`,
     noneButtonTitle: 'Ninguna ✅',
     helpButtonTitle: 'Cómo ordenar 💡',
     quickCommands: 'También puedes escribir:\n*menú* — ver el menú\n*carrito* — ver tu orden\n*listo* — finalizar\n*repetir* — repetir tu última orden\n*agente* — hablar con una persona',
+    promoOptedIn: '🎉 ¡Listo! Te avisaremos de nuestras ofertas y promos de vez en cuando. Escribe *parar ofertas* cuando quieras para cancelar.',
+    promoOptedOut: 'Listo — no más ofertas ni promos. Escribe *ofertas* cuando quieras si cambias de opinión. 👍',
     askDeliveryNote: '🏠 ¿Algo que ayude al repartidor a encontrarte? Un punto de referencia, color del portón, número de casa — puedes escribirlo, mandar una nota de voz 🎙️, o hasta una foto 📷 del lugar.\n\nToca *Omitir* si es fácil de encontrar.',
     skipButtonTitle: 'Omitir ⏭️',
     deliveryNoteSaved: 'Listo — se lo pasamos al repartidor. 🏍️',
@@ -4080,6 +4093,24 @@ async function processWhatsAppMessage(message, res) {
       }
     }
 
+    // ---- PROMO OPT-IN / OPT-OUT ----
+    // WhatsApp requires genuine customer consent before sending marketing
+    // content outside the 24h service window — having ordered once is NOT
+    // that consent. This is the only place a customer becomes eligible for
+    // /manager's Promos tab. Stores language at opt-in time (not tracked
+    // elsewhere per-customer) so a promo sent days later still lands in the
+    // right one.
+    if (msg === 'deals' || msg === 'ofertas' || msg === 'promos' || msg === 'promo') {
+      saveCustomerProfile(from, { promoOptIn: true, language: lang })
+        .catch(err => console.error(`Failed to save promo opt-in for ${from}:`, err.message || err));
+      return sendReply(res, from, t.promoOptedIn);
+    }
+    if (msg === 'stop deals' || msg === 'no deals' || msg === 'no ofertas' || msg === 'parar ofertas' || msg === 'unsubscribe') {
+      saveCustomerProfile(from, { promoOptIn: false })
+        .catch(err => console.error(`Failed to save promo opt-out for ${from}:`, err.message || err));
+      return sendReply(res, from, t.promoOptedOut);
+    }
+
     if (msg === 'language' || msg === 'idioma' || msg === 'lang') {
       session.language = null;
       session.step = 'language';
@@ -5996,6 +6027,14 @@ const MANAGER_HTML = `<!doctype html>
   .row button { font:inherit; font-size:13px; font-weight:600; padding:7px 11px; border-radius:7px;
                 border:1px solid var(--line); background:var(--surface2); color:var(--text); cursor:pointer; }
   .row button.save { background:var(--good); color:var(--onAccent); border-color:transparent; }
+  .promoNote { background:var(--surface2); border:1px solid var(--line); border-radius:9px;
+               padding:11px 13px; font-size:13px; color:var(--dim); line-height:1.5; }
+  .fieldLbl { display:block; font-size:13px; font-weight:600; color:var(--dim);
+              margin:14px 0 6px; }
+  #tab-promos textarea, #tab-promos input[type=text] {
+    width:100%; font:inherit; font-size:15px; padding:10px; border-radius:8px;
+    border:1px solid var(--line); background:var(--bg); color:var(--text); resize:vertical; }
+  #sendPromoBtn:disabled { opacity:.55; cursor:default; }
   .row button.out { background:var(--pillOff); color:#ffc9c9; border-color:#5a2b2b; }
   .row button.pin { background:var(--accent); color:var(--onAccent); border-color:transparent; }
   #upsellStatus { font-size:13px; color:var(--dim); margin-bottom:12px; }
@@ -6051,6 +6090,7 @@ const MANAGER_HTML = `<!doctype html>
       <button class="tab" data-tab="menu" onclick="showTab('menu')">Menu</button>
       <button class="tab" data-tab="live" onclick="showTab('live')">Live</button>
       <button class="tab" data-tab="customers" onclick="showTab('customers')">Customers</button>
+      <button class="tab" data-tab="promos" onclick="showTab('promos')">Promos</button>
     </span>
     <span class="muted" id="updated">—</span>
   </header>
@@ -6080,6 +6120,35 @@ const MANAGER_HTML = `<!doctype html>
       <div class="scroll"><table>
         <thead><tr><th>Phone</th><th>Saved address</th><th>Notes</th><th>Updated</th></tr></thead>
         <tbody id="custRows"></tbody></table></div>
+    </section>
+
+    <section id="tab-promos" hidden>
+      <h2>Send a promo</h2>
+      <div class="promoNote">
+        Only sent to customers who opted in by texting <strong>*deals*</strong>
+        (or <strong>*ofertas*</strong>). WhatsApp only delivers a plain message
+        to someone who has messaged in the last 24h — anyone outside that
+        window will show as "not reached" below, which is Meta's rule, not a
+        bug here.
+      </div>
+      <div class="tile" style="margin:14px 0"><div class="k">Opted in</div>
+        <div class="v" id="optedInCount">—</div></div>
+
+      <label class="fieldLbl">English</label>
+      <textarea id="promoEn" rows="3" maxlength="700"
+        placeholder="e.g. 🎉 Today only: 20% off all smoothies!"></textarea>
+
+      <label class="fieldLbl">Español (opcional — falls back to English if blank)</label>
+      <textarea id="promoEs" rows="3" maxlength="700"
+        placeholder="ej. 🎉 ¡Solo hoy: 20% de descuento en todos los smoothies!"></textarea>
+
+      <label class="fieldLbl">Image URL (optional)</label>
+      <input id="promoImg" type="text" placeholder="https://...">
+
+      <div style="margin-top:12px">
+        <button class="save" id="sendPromoBtn" onclick="sendPromo()">Send now</button>
+      </div>
+      <div id="promoResult" class="lbl" style="margin-top:10px"></div>
     </section>
   </main>
 </div>
@@ -6155,7 +6224,7 @@ try { applyTheme(localStorage.getItem('managerTheme') || 'day'); } catch(e){ app
 
 function showTab(t){
   currentTab=t;
-  ['overview','menu','live','customers'].forEach(function(x){
+  ['overview','menu','live','customers','promos'].forEach(function(x){
     document.getElementById('tab-'+x).hidden = (x!==t);
   });
   document.querySelectorAll('.tab').forEach(function(b){
@@ -6164,6 +6233,42 @@ function showTab(t){
   if(t==='menu') loadMenu();
   if(t==='live') loadLive();
   if(t==='customers') loadCustomers();
+  if(t==='promos') loadPromo();
+}
+
+function loadPromo(){
+  fetch('/manager/promo').then(function(r){return r.json();}).then(function(d){
+    document.getElementById('optedInCount').textContent = d.optedIn;
+    var box = document.getElementById('promoResult');
+    if (d.lastResult) {
+      var when = new Date(d.lastResult.sentAt).toLocaleString();
+      box.textContent = 'Last sent ' + when + ': reached ' + d.lastResult.sent + ' of ' +
+        d.lastResult.total + (d.lastResult.failed ? ' (' + d.lastResult.failed + ' outside the 24h window)' : '') + '.';
+    } else {
+      box.textContent = '';
+    }
+  }).catch(function(e){ console.error(e); });
+}
+
+function sendPromo(){
+  var textEn = document.getElementById('promoEn').value.trim();
+  var textEs = document.getElementById('promoEs').value.trim();
+  var mediaUrl = document.getElementById('promoImg').value.trim();
+  if (!textEn && !textEs) { alert('Write at least one language.'); return; }
+  var count = document.getElementById('optedInCount').textContent;
+  if (!confirm('Send this to ' + count + ' opted-in customer(s) now? This sends real WhatsApp messages.')) return;
+
+  var btn = document.getElementById('sendPromoBtn');
+  btn.disabled = true; btn.textContent = 'Sending…';
+  fetch('/manager/promo/send', { method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({ textEn: textEn, textEs: textEs, mediaUrl: mediaUrl }) })
+   .then(function(r){ return r.json().then(function(j){ if(!r.ok) throw new Error(j.error||'failed'); return j; }); })
+   .then(function(j){
+     document.getElementById('promoResult').textContent =
+       'Sent to ' + j.sent + ' of ' + j.total + (j.failed ? ' (' + j.failed + ' outside the 24h window)' : '') + '.';
+   })
+   .catch(function(e){ alert(e.message); })
+   .finally(function(){ btn.disabled = false; btn.textContent = 'Send now'; });
 }
 
 function loadLive(){
@@ -6365,8 +6470,65 @@ app.get('/manager/customers', (req, res) => {
     savedAddress: p.savedAddress || '',
     notes: p.notes || '',
     updatedAt: p.updatedAt || '',
+    promoOptIn: Boolean(p.promoOptIn),
+    language: p.language || '',
   }));
   res.json({ customers });
+});
+
+// ---- PROMOS ----
+// Sends a manager-composed message to every customer who explicitly opted in
+// via *deals*/*ofertas* (see the global command handler) — never the full
+// customer list. WhatsApp only allows free-form text to a customer who has
+// messaged within the last 24h; anyone outside that window will fail this
+// send, which Meta enforces on their end regardless of what this code does.
+// That's a real reach limit, not a bug — see CHANGELOG.md for why a
+// template-based send (for reach beyond 24h) is the deliberate next step,
+// not something bolted on here.
+let lastPromoResult = null; // in-memory only; resets on restart, which is fine — it's a status readout, not a record of truth (the WhatsApp delivery itself is)
+
+app.get('/manager/promo', (req, res) => {
+  if (!requireManagerAuth(req, res)) return;
+  const optedIn = Object.values(customerProfiles).filter(p => p.promoOptIn).length;
+  res.json({ optedIn, lastResult: lastPromoResult });
+});
+
+app.post('/manager/promo/send', async (req, res) => {
+  if (!requireManagerAuth(req, res)) return;
+  const textEn = String((req.body && req.body.textEn) || '').trim().slice(0, 700);
+  const textEs = String((req.body && req.body.textEs) || '').trim().slice(0, 700);
+  const mediaUrl = String((req.body && req.body.mediaUrl) || '').trim();
+  if (!textEn && !textEs) return res.status(400).json({ error: 'Write at least one language.' });
+  if (mediaUrl && !/^https:\/\//.test(mediaUrl)) return res.status(400).json({ error: 'Image URL must start with https://' });
+
+  const recipients = Object.entries(customerProfiles).filter(([, p]) => p.promoOptIn);
+  if (recipients.length === 0) return res.status(400).json({ error: 'No customers have opted in yet.' });
+
+  let sent = 0;
+  const failed = [];
+  for (const [phone, p] of recipients) {
+    const lang = p.language === 'es' ? 'es' : 'en';
+    const text = (lang === 'es' ? textEs : textEn) || textEn || textEs; // fall back to whichever language was written
+    try {
+      await sendWhatsAppMessage(phone, mediaUrl ? { mediaUrl, text } : text);
+      sent++;
+    } catch (err) {
+      // Expected for anyone outside the 24h window — Meta rejects the send
+      // rather than this code doing anything wrong. Counted, not thrown.
+      failed.push(phone);
+      console.warn(`Promo send failed for ${phone}:`, err.message || err);
+    }
+    // Sequential with a short gap rather than firing all at once — matches
+    // the same pacing reasoning as sendReply's multi-message stagger, and
+    // keeps a burst of sends from tripping Chakra/Meta's own rate limits.
+    // Skipped in dry-run, same as sendReply's — purely a real-network
+    // concern, and would just slow the test suite down for no benefit.
+    if (!BOT_DRY_RUN) await new Promise(r => setTimeout(r, 250));
+  }
+
+  lastPromoResult = { sentAt: new Date().toISOString(), sent, failed: failed.length, total: recipients.length };
+  console.log(`Manager dashboard: promo sent to ${sent}/${recipients.length} opted-in customers (${failed.length} unreachable — likely outside the 24h window)`);
+  res.json({ ok: true, ...lastPromoResult });
 });
 
 app.post('/manager/pause', (req, res) => {
@@ -6449,4 +6611,4 @@ if (require.main === module) {
 
 // For the replay-test harness (test/replay.test.js) only — production never
 // requires this file as a module, so these exports are inert otherwise.
-module.exports = { app, processWhatsAppMessage, isItemSoldOut, itemAt, interpretMessage, dryRunSent, sessions, lastOrders, savedCarts, cartTotal, OWNER_NUMBERS, DRIVER_NUMBERS, soldOutIds, sweepIdleSessions, replySummaryText, MENU, applyMenuSheetRows, resetMenuSheetTrackingForTests, notifyStatusChange, dryRunSheetRows, dryRunSheetWrites, setPinnedUpsellForTests };
+module.exports = { app, processWhatsAppMessage, isItemSoldOut, itemAt, interpretMessage, dryRunSent, sessions, lastOrders, savedCarts, cartTotal, OWNER_NUMBERS, DRIVER_NUMBERS, soldOutIds, sweepIdleSessions, replySummaryText, MENU, applyMenuSheetRows, resetMenuSheetTrackingForTests, notifyStatusChange, dryRunSheetRows, dryRunSheetWrites, setPinnedUpsellForTests, customerProfiles };
