@@ -1,79 +1,82 @@
-# Pedidos Bot — live demo
+# Order Line — live demo
 
-A WhatsApp-style ordering bot you can edit in front of a client. One file, no
-build step, no API key, no network calls. Open `chatbot.html` in a browser and
-it runs.
+A demo of the WhatsApp ordering bot, built to be edited in front of a client.
+One file, no build step, no API key, no network calls. Open `chatbot.html` in
+a browser and it runs.
 
-It takes a real order end to end: reads the menu, understands quantities,
-builds a cart, totals it with delivery, confirms, **issues an order number and
-assigns a driver**, and then answers "¿dónde va mi pedido?" with that ticket.
+It mirrors the command flow in `WhatsAppOrderBot/main.py` — the same commands,
+the same order-id shape, the same "estimated delivery" close — so a client who
+buys after seeing this gets what they saw.
 
-## The two surfaces
+## The commands it answers
 
-| Surface | Who touches it | Where |
-|---|---|---|
-| **The chat** | The client, on your phone | top on mobile, left on desktop |
-| **Live setup panel** | You, mid-pitch | below on mobile, right on desktop |
+| Command | What happens |
+|---|---|
+| `MENU` | Menu grouped by course, **with prices**, ending in the ORDER hint |
+| `ORDER [item] [quantity]` | Places the order, returns the ticket |
+| `STATUS` | Last 5 orders with status, total and time |
+| `DELIVERY` | Prompts for `Address: [your full address]` |
+| `Address: ...` | Confirms the saved address |
+| `HELP` / `hi` | The welcome message and the command list |
+| anything else | "I'm not sure I understand. Type HELP…" |
 
-Every edit applies to the running conversation and drops a `PEDIDO ACTUALIZADO`
-divider into the thread, so the client *sees* the bot learn their business.
+Item matching is a substring of the menu name, the same as the webhook — so
+`ORDER fried rice 2` and `ORDER rice 2` both land on Fried Rice.
+
+## Where the demo deliberately differs from main.py
+
+Three of these are bugs in the bot that the demo does **not** reproduce,
+because reproducing them would make the demo unsellable. They need fixing in
+the bot before a client sees a real deployment.
+
+1. **Ordering works here.** In `main.py` the `elif "order" in user_message`
+   branch is tested *before* `elif user_message.startswith("order ")`, so
+   `process_order()` is unreachable and no order can ever be placed. The demo
+   tests the specific command first.
+2. **Prices show here.** `get_menu_text()` prints name and description but no
+   price, and both `Total:` lines — in the order confirmation and in the
+   status list — interpolate nothing and come out blank.
+3. **A driver is assigned here.** The `Driver` model and `Order.driver_id`
+   exist, but nothing ever writes them and no message names a driver.
+
+Also worth knowing: `save_address()` returns success without saving anything,
+and orders are created with no `delivery_address`.
 
 ## What to edit on the spot, in order
 
-1. **Shop name** — retype it as theirs. Header, avatar initials and several
-   answers change at once. Ten seconds and the demo is about them.
-2. **The menu** — the strongest beat. Ask for three real dishes and prices,
-   type them in, then **hand them the phone** and let them order their own food
-   in their own words. The bot parses `"quiero 2 tacos al pastor"` — digits or
-   words (`dos`, `una`), accent- and case-insensitive.
-3. **Confirm the order in front of them** — this is the close. The ticket shows
-   the order number, the totals, and the driver assigned off their own roster.
-   Ask them what number they'd want their orders to start at and set it live.
-4. **The drivers** — put their real drivers and unit numbers in. Whoever is
-   marked available gets assigned next; the bot flips them to *en ruta* on
-   assignment, so the second order goes to the second driver.
-5. **Answers you write** — ask "what question are you sickest of answering?"
-   Type their trigger word and their answer. It works on the next message.
+1. **Restaurant name** — retype it as theirs. Header, avatar initials and the
+   menu title change at once.
+2. **The menu** — their real dishes, courses and prices. Then hand them the
+   phone and let them type `ORDER <their dish> 2` themselves.
+3. **The order prefix** — set it to their initials so the ticket reads
+   `#GD20260829…` in their own branding.
+4. **The drivers** — their real drivers and numbers. Whoever is available gets
+   the next order and flips to delivering, so a second order goes to a second
+   driver.
 
 Then open **What this looks like to us** and say the true thing: on a real
-account that comes out of their existing menu, nobody retypes it.
-
-## The language switch
-
-Top-right of the panel flips the bot between **Español** and **English** — the
-replies, the quick-reply chips, the send button and the status labels. The
-opening message is per-language, so each one keeps its own wording.
-
-Worth doing live if your client serves both.
-
-## What the bot handles
-
-- **Ordering** — any menu item by name, with quantities as digits or words;
-  several items in one message (`"2 tacos y una agua"`)
-- **`menú` / `carta`** — the full list with prices
-- **`mi pedido`** — the cart so far, with subtotal, delivery and total
-- **`confirmar`** — places it, numbers it, assigns a driver
-- **`¿dónde va mi pedido?`** — the live ticket
-- Delivery fee, zone, hours, payment methods, "hablar con una persona"
-- Anything you added under **Answers you write**
-- Everything else gets a fallback that names what it *can* do
+account this comes out of their existing menu, nobody retypes it.
 
 ## Editing the file instead of the panel
 
 Everything the panel edits also lives in a `PITCH_CONFIG` block at the top of
 the `<script>`. Change it, save, reload — good for loading a client's menu
-*before* a meeting so the demo opens already looking like theirs. The panel is
-for changes during the meeting.
+before a meeting. The panel is for changes during the meeting.
 
-`Reset demo` restores `PITCH_CONFIG`, empties the cart and clears the thread.
-Hit it between meetings.
+`Reset demo` restores `PITCH_CONFIG`, clears the orders and the thread.
 
 ## Why nothing here is risky
 
 - No network calls, no API keys, no backend. It works with the wifi off.
-- No model. Answers are keyword matching over your config, so **the bot cannot
-  say anything you did not write** — no invented prices, no invented promises.
+- No model. Replies are the command handlers above, so the bot cannot invent
+  a price or a promise.
 - Edits persist per-browser in `localStorage` only. Nothing leaves the device.
-- The menu, drivers and phone number are fictional. Replace them in the panel.
-- It's styled as a messaging thread and labelled WhatsApp because that's the
-  channel it's for; it doesn't use Meta's branding or claim to be their product.
+- Menu, drivers and prices are placeholders — replace them in the panel.
+- Styled as a messaging thread and labelled with the channel it targets; it
+  does not use Meta branding or claim to be their product.
+
+## One gap to plan for
+
+Editing the menu live is the demo's strongest moment, but in `main.py` the
+menu is a hardcoded `CHINESE_MENU` dict. To make the demo true, the menu needs
+to move to the database or a JSON file the bot reads at request time.

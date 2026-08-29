@@ -184,50 +184,44 @@ details.json pre{margin:0; padding:0 12px 12px; overflow-x:auto; font-family:"IB
       <div class="eyebrow">Live demo</div>
       <h1>Order Line</h1>
     </div>
-    <p class="mast-note">An ordering bot for WhatsApp. Everything it knows &mdash; the menu, the prices, the drivers &mdash; is in the setup panel. Change it and the <b>conversation updates mid&#8209;chat</b>. Nothing calls out to a server.</p>
+    <p class="mast-note">The same commands your bot runs &mdash; <b>MENU</b>, <b>ORDER</b>, <b>STATUS</b>, <b>DELIVERY</b>, <b>HELP</b>. The menu, prices and drivers come from the setup panel, so you can retype them as a client's own while they watch. Nothing calls out to a server.</p>
   </header>
 
   <div class="stage">
     <section class="panel handset" aria-label="Chat demo">
       <div class="hs-head">
-        <div class="hs-mark" id="mark">SN</div>
+        <div class="hs-mark" id="mark">FR</div>
         <div class="hs-who">
-          <div class="hs-shop" id="shopName">Sabor Norteño</div>
-          <div class="hs-meta"><span class="dot"></span><span id="botName">Pedidos</span></div>
+          <div class="hs-shop" id="shopName">Friendship Restaurant</div>
+          <div class="hs-meta"><span class="dot"></span><span id="botName">Orders</span></div>
         </div>
         <span class="hs-chan">WhatsApp</span>
       </div>
       <div class="log" id="log" role="log" aria-live="polite" aria-label="Conversation"></div>
       <div class="chips" id="chips"></div>
       <form class="composer" id="composer">
-        <input id="entry" type="text" autocomplete="off" aria-label="Your message">
+        <input id="entry" type="text" autocomplete="off" aria-label="Your message" placeholder="Type MENU, ORDER, STATUS&hellip;">
         <button class="send" type="submit" id="sendBtn">Send</button>
       </form>
     </section>
 
     <section class="panel console" aria-label="Live setup">
-      <div class="con-head">
-        <h2>Live setup</h2>
-        <div class="langsw" role="group" aria-label="Bot language">
-          <button type="button" id="langEn" aria-pressed="true">English</button>
-          <button type="button" id="langEs" aria-pressed="false">Español</button>
-        </div>
-      </div>
+      <div class="con-head"><h2>Live setup</h2></div>
       <p class="con-sub">These are the fields you'd fill in from a client's own menu. Edit any of them while they watch &mdash; the bot changes on the next message.</p>
 
       <fieldset>
         <legend>1 &mdash; <b>The business</b></legend>
         <div class="grid two">
-          <label><span class="lab">Shop name</span><input type="text" id="f-shop" data-k="shop"></label>
+          <label><span class="lab">Restaurant</span><input type="text" id="f-shop" data-k="shop"></label>
           <label><span class="lab">Bot name</span><input type="text" id="f-bot" data-k="bot"></label>
         </div>
         <div class="grid" style="margin-top:11px">
-          <label><span class="lab">Opening message</span><textarea id="f-greeting"></textarea></label>
+          <label><span class="lab">Welcome message (HELP)</span><textarea id="f-greeting" data-k="greeting" style="min-height:120px"></textarea></label>
         </div>
       </fieldset>
 
       <fieldset>
-        <legend>2 &mdash; <b>The menu</b> &mdash; what they can order and what it costs</legend>
+        <legend>2 &mdash; <b>The menu</b> &mdash; grouped by course, exactly as the bot prints it</legend>
         <div class="rows" id="menu"></div>
         <div class="row-actions"><button class="btn" type="button" id="addItem">+ Add item</button></div>
       </fieldset>
@@ -243,28 +237,22 @@ details.json pre{margin:0; padding:0 12px 12px; overflow-x:auto; font-family:"IB
         <div class="grid three">
           <label><span class="lab">Currency</span><input type="text" id="f-cur" data-k="currency" class="mono"></label>
           <label><span class="lab">Delivery fee</span><input type="text" id="f-fee" data-k="fee" class="mono"></label>
-          <label><span class="lab">Next order no.</span><input type="text" id="f-ord" data-k="orderNo" class="mono"></label>
+          <label><span class="lab">Order prefix</span><input type="text" id="f-pre" data-k="orderPrefix" class="mono"></label>
         </div>
         <div class="grid two" style="margin-top:11px">
+          <label><span class="lab">Estimated delivery</span><input type="text" id="f-eta" data-k="eta"></label>
           <label><span class="lab">Hours</span><input type="text" id="f-hours" data-k="hours"></label>
-          <label><span class="lab">Phone</span><input type="text" id="f-phone" data-k="phone" class="mono"></label>
         </div>
         <div class="grid two" style="margin-top:11px">
-          <label><span class="lab">Payment accepted</span><input type="text" id="f-pay" data-k="payment"></label>
+          <label><span class="lab">Payment</span><input type="text" id="f-pay" data-k="payment"></label>
           <label><span class="lab">Delivery zone</span><input type="text" id="f-zone" data-k="zone"></label>
         </div>
-      </fieldset>
-
-      <fieldset>
-        <legend>5 &mdash; <b>Answers you write</b></legend>
-        <div class="rows" id="answers"></div>
-        <div class="row-actions"><button class="btn" type="button" id="addAnswer">+ Add answer</button></div>
       </fieldset>
 
       <details class="json">
         <summary>What this looks like to us</summary>
         <pre id="jsonOut"></pre>
-        <p class="json-note">On a real account this comes straight out of your existing menu &mdash; nobody retypes it.</p>
+        <p class="json-note">On a real account this comes straight out of the restaurant's existing menu &mdash; nobody retypes it.</p>
       </details>
 
       <div class="row-actions">
@@ -282,377 +270,247 @@ details.json pre{margin:0; padding:0 12px 12px; overflow-x:auto; font-family:"IB
    Change a value, save the file, reload. Everything below is plumbing.
    ══════════════════════════════════════════════════════════════════════ */
 const PITCH_CONFIG = {
-  shop: "Riverside Kitchen",
+  shop: "Friendship Restaurant",
   bot:  "Orders",
-  lang: "en",              // "en" or "es" — switchable live in the panel
-  currency: "$",           // Belize dollars; some shops prefer to write "BZ$"
+  currency: "$",           // Belize dollars
   fee: "8",                // delivery fee, same currency
-  orderNo: "1042",         // next order number; ticks up on each order
-  hours: "Tue–Sun 11:00am–10:00pm",
-  phone: "+501 610-2244",
-  payment: "Cash, card, or bank transfer",
+  orderPrefix: "FR",       // order ids read FR20260829A3F9C1
+  eta: "30-45 minutes",
+  hours: "11AM - 10PM daily",
+  payment: "Cash or card on delivery",
   zone: "Belize City, up to 5 miles out",
 
-  greeting: {
-    en: "Hi! This is Orders at Riverside Kitchen. Tell me what you want and we'll run it out to you. Ask for the menu to see everything.",
-    es: "¡Hola! Soy Orders de Riverside Kitchen. Dime qué quieres y te lo mandamos. Pide el menú para ver todo."
-  },
+  greeting:
+    "Welcome to Friendship Restaurant!\n\n" +
+    "I can help you:\n" +
+    "Type MENU — see our dishes and prices\n" +
+    "Type ORDER — place an order\n" +
+    "Type STATUS — check your order\n" +
+    "Type DELIVERY — set your delivery address\n" +
+    "Type HELP — show this message\n\n" +
+    "Open 11AM - 10PM daily.",
 
-  // The bot matches on these names, accent- and case-insensitively, and picks
-  // up quantities written as digits or words ("2 salbutes", "two salbutes").
+  // Grouped by course. The bot matches an ORDER command against these names
+  // the same way your webhook does — the typed name as a substring.
   menu: [
-    { name:"Rice and beans with stew chicken", price:"14", note:"with potato salad" },
-    { name:"Garnaches",                        price:"3",  note:"order of 3" },
-    { name:"Salbutes",                         price:"6",  note:"chicken or beef, order of 3" },
-    { name:"Meat pie",                         price:"2",  note:"each" },
-    { name:"Seaweed shake",                    price:"7",  note:"16 oz" }
+    { cat:"Appetizers", name:"Spring Rolls (4 pcs)",  price:"8",  desc:"Crispy vegetable spring rolls" },
+    { cat:"Appetizers", name:"Pork Dumplings (6 pcs)", price:"12", desc:"Steamed pork dumplings" },
+    { cat:"Appetizers", name:"Wonton Soup",            price:"9",  desc:"Classic wonton soup" },
+    { cat:"Mains",      name:"Sweet & Sour Chicken",   price:"20", desc:"Crispy chicken in tangy sauce" },
+    { cat:"Mains",      name:"Beef with Broccoli",     price:"24", desc:"Tender beef with fresh broccoli" },
+    { cat:"Mains",      name:"Chow Mein",              price:"18", desc:"Stir-fried noodles with vegetables" },
+    { cat:"Mains",      name:"Fried Rice",             price:"16", desc:"Special fried rice with shrimp and pork" },
+    { cat:"Drinks",     name:"Green Tea",              price:"4",  desc:"Hot green tea" },
+    { cat:"Drinks",     name:"Coca Cola",              price:"3",  desc:"Cold can" }
   ],
 
-  // Whoever is "available" gets assigned when an order is confirmed.
+  // Whoever is "available" gets assigned when an order comes in.
   drivers: [
     { unit:"04", name:"Kenrick Flowers", status:"available" },
     { unit:"07", name:"Alba Requena",    status:"delivering" },
     { unit:"12", name:"Dwayne Palacio",  status:"available" }
-  ],
-
-  // Trigger words are comma-separated. First match wins.
-  answers: [
-    { trigger:"vegetarian, vegan, no meat",
-      reply:"Yes — the garnaches are vegetarian as they come, and we can do the rice and beans without the chicken. The seaweed shake has milk in it, so say the word if you need that left out." }
   ]
 };
 
-/* ── copy ─────────────────────────────────────────────────────────── */
-const T = {
-  es:{
-    send:"Enviar", placeholder:"Escribe tu pedido…",
-    menuIntro: s => "Esto es lo que tenemos hoy en " + s + ":",
-    added: n => n + (n === 1 ? " agregado a tu pedido." : " agregados a tu pedido."),
-    cartEmpty:"Todavía no tienes nada en el pedido. Escribe lo que quieras y te lo anoto.",
-    cartHead:"Tu pedido va así:",
-    confirmHint:"Si está bien, escribe *confirmar* y lo mando.",
-    subtotal:"Subtotal", feeLbl:"Envío", total:"Total",
-    placed:"¡Listo! Tu pedido está confirmado.",
-    driverLbl:"Repartidor asignado",
-    noDriver:"Ahorita todos los repartidores están ocupados — en cuanto se libere uno te aviso por aquí.",
-    statusNone:"No tienes ningún pedido en curso. Escríbeme lo que quieras y empezamos.",
-    statusHead:"Tu pedido va en camino:",
-    hours: (s,h) => s + " abre " + h + ". Fuera de ese horario déjame tu pedido y lo programo.",
-    fee: (c,f,z) => "El envío es de " + c + f + ". Cubrimos " + z + ".",
-    pay: p => "Aceptamos " + p + ".",
-    human: (ph,h) => "Te comunico con alguien: " + ph + ", en horario de " + h + ". O déjame aquí tu duda y la paso.",
-    thanks:"¡Gracias a ti! ¿Se te ofrece algo más?",
-    fallback:"No te entendí bien 🤔 Puedo mostrarte el menú, tomar tu pedido, decirte el costo de envío o el estado de tu pedido. ¿Qué necesitas?",
-    chips:{ menu:"Ver el menú", order:n => "Quiero 2 " + n, fee:"¿Cuánto es el envío?", confirm:"Confirmar" },
-    updated:"pedido actualizado"
-  },
-  en:{
-    send:"Send", placeholder:"Type your order…",
-    menuIntro: s => "Here's what " + s + " has today:",
-    added: n => n + (n === 1 ? " added to your order." : " added to your order."),
-    cartEmpty:"Nothing in your order yet. Tell me what you'd like and I'll add it.",
-    cartHead:"Here's your order so far:",
-    confirmHint:"If that looks right, type *confirm* and I'll send it.",
-    subtotal:"Subtotal", feeLbl:"Delivery", total:"Total",
-    placed:"Done! Your order is confirmed.",
-    driverLbl:"Driver assigned",
-    noDriver:"Every driver is out right now — I'll message you here the moment one frees up.",
-    statusNone:"You don't have an order going. Tell me what you'd like and we'll start one.",
-    statusHead:"Your order is on its way:",
-    hours: (s,h) => s + " is open " + h + ". Outside that, leave your order and I'll schedule it.",
-    fee: (c,f,z) => "Delivery is " + c + f + ". We cover " + z + ".",
-    pay: p => "We take " + p + ".",
-    human: (ph,h) => "I'll put you through: " + ph + ", during " + h + ". Or leave your question here and I'll pass it on.",
-    thanks:"Thank you! Anything else?",
-    fallback:"I didn't quite catch that. I can show the menu, take your order, quote delivery, or check your order status. What do you need?",
-    chips:{ menu:"Show me the menu", order:n => "2 " + n, fee:"How much is delivery?", confirm:"Confirm" },
-    updated:"order updated"
-  }
-};
-
 /* ── plumbing ─────────────────────────────────────────────────────── */
-const STORE = "pedidos-bot-v1";
+const STORE = "order-line-v2";
 const DRV_STATUS = ["available","delivering","off"];
-const DRV_LABEL = {
-  es:{ available:"Disponible", delivering:"En ruta", off:"Fuera" },
-  en:{ available:"Available",  delivering:"Delivering", off:"Off" }
-};
+const DRV_LABEL  = { available:"Available", delivering:"Delivering", off:"Off" };
 
 const loadCfg = () => { try { return JSON.parse(localStorage.getItem(STORE)) || null; } catch(e){ return null; } };
 const saveCfg = () => { try { localStorage.setItem(STORE, JSON.stringify(cfg)); } catch(e){} };
 
-let cfg  = loadCfg() || structuredClone(PITCH_CONFIG);
-let cart = [];
-let order = null;
+let cfg = loadCfg() || structuredClone(PITCH_CONFIG);
+let orders = [];      // newest first, like the STATUS query
+let address = null;
 
 const $ = id => document.getElementById(id);
-const t  = () => T[cfg.lang] || T.es;
 function el(tag, props, ...kids){
   const n = Object.assign(document.createElement(tag), props || {});
-  for (const k of kids.flat()) if (k != null) n.append(k);
+  for (const k of kids.flat(Infinity)) if (k != null) n.append(k);
   return n;
 }
-const norm = s => String(s).toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g,"").trim();
-const num  = v => { const n = parseFloat(String(v).replace(/[^\d.-]/g,"")); return isNaN(n) ? 0 : n; };
+const num   = v => { const n = parseFloat(String(v).replace(/[^\d.-]/g,"")); return isNaN(n) ? 0 : n; };
 const money = n => cfg.currency + n.toFixed(2).replace(/\.00$/,"");
 const initials = s => (String(s).trim().split(/\s+/).slice(0,2).map(w => w[0] || "").join("") || "??").toUpperCase();
-const escRe = s => s.replace(/[.*+?^${}()|[\]\\]/g,"\\$&");
+const stamp = () => { const d = new Date();
+  return d.getFullYear() + String(d.getMonth()+1).padStart(2,"0") + String(d.getDate()).padStart(2,"0"); };
+const hex6 = () => Array.from({length:6}, () => "0123456789ABCDEF"[Math.floor(Math.random()*16)]).join("");
+const clock = d => String(d.getHours()).padStart(2,"0") + ":" + String(d.getMinutes()).padStart(2,"0");
 
-const WORDNUM = { un:1, uno:1, una:1, dos:2, tres:3, cuatro:4, cinco:5, seis:6, siete:7, ocho:8,
-                  one:1, two:2, three:3, four:4, five:5, six:6, seven:7, eight:8 };
-const NUMTOK = Object.keys(WORDNUM).join("|");
-// English dish names are full of connectors ("rice and beans WITH stew chicken").
-// Without this, any message containing "with" would match that item.
-const STOP = new Set(["with","from","your","plus","this","that","them","and","the","for",
-                      "con","del","los","las","por","para","una","uno"]);
-
-/* ── order maths ──────────────────────────────────────────────────── */
-const subtotal = () => cart.reduce((s,l) => s + num(l.price) * l.qty, 0);
-const feeNum   = () => num(cfg.fee);
-const total    = () => subtotal() + feeNum();
-
-/* find menu items mentioned in a message, with quantities */
-function parseItems(raw){
-  const q = norm(raw), hits = [];
-  for (const item of cfg.menu){
-    const full = norm(item.name);
-    if (!full) continue;
-    const tokens = full.split(/\s+/).filter(w => w.length >= 4 && !STOP.has(w));
-    const present = [full, ...tokens].filter(n => q.includes(n));
-    if (!present.length) continue;
-
-    // match on the most specific phrase that actually appears
-    const needle = present.sort((a,b) => b.length - a.length)[0];
-    const at = q.indexOf(needle);
-
-    // the quantity is the last number in the short run of words before the
-    // item, so "2 rice and beans" reads as 2 even though "2" isn't adjacent
-    const before = q.slice(Math.max(0, at - 24), at);
-    const nums = [...before.matchAll(new RegExp("(?:^|\\s)(\\d+|" + NUMTOK + ")(?=\\s|$)", "g"))];
-    const tok = nums.length ? nums[nums.length - 1][1] : null;
-    const qty = tok ? (parseInt(tok, 10) || WORDNUM[tok] || 1) : 1;
-
-    hits.push({ item, qty: Math.max(1, Math.min(qty, 99)), at });
-  }
-  return hits.sort((a,b) => a.at - b.at);
-}
-
-function addToCart(hits){
-  for (const h of hits){
-    const line = cart.find(l => l.name === h.item.name);
-    if (line) line.qty += h.qty;
-    else cart.push({ name:h.item.name, price:h.item.price, qty:h.qty });
-  }
-}
-
-function placeOrder(){
+/* ── the bot: the same commands the webhook routes ────────────────── */
+function placeOrder(item, qty){
   const free = cfg.drivers.find(d => d.status === "available");
-  const no = String(cfg.orderNo || "1000");
-  cfg.orderNo = String((parseInt(no,10) || 1000) + 1);
-  order = {
-    no, lines: cart.map(l => ({...l})),
-    sub: subtotal(), fee: feeNum(), tot: total(),
+  const o = {
+    id: (cfg.orderPrefix || "FR") + stamp() + hex6(),
+    item: item.name, qty, price: num(item.price),
+    total: num(item.price) * qty + num(cfg.fee),
+    status: "pending", at: new Date(),
     driver: free ? {...free} : null
   };
   if (free) free.status = "delivering";
-  cart = [];
-  buildDrivers(); syncFields(); saveCfg();
-  return order;
+  orders.unshift(o);
+  buildDrivers(); saveCfg();
+  return o;
 }
 
-/* ── rendering blocks ─────────────────────────────────────────────── */
+function processOrder(raw){
+  // mirrors process_order(): "ORDER <item name> <quantity>"
+  const parts = raw.trim().split(/\s+/);
+  if (parts.length < 3)
+    return { text:"Please specify item and quantity.\nExample: ORDER fried rice 2" };
+
+  const qty = parseInt(parts[parts.length - 1], 10);
+  if (!qty || qty < 1)
+    return { text:"I need a quantity at the end.\nExample: ORDER fried rice 2" };
+
+  const typed = parts.slice(1, -1).join(" ").toLowerCase();
+  const item = cfg.menu.find(m => m.name.toLowerCase().includes(typed));
+  if (!item)
+    return { text:"Item '" + typed + "' not found. Type MENU to see what's available." };
+
+  const o = placeOrder(item, Math.min(qty, 99));
+  return { text:"Order placed.", block:ticketBlock(o) };
+}
+
+function answer(raw){
+  const q = raw.trim().toLowerCase();
+
+  // NOTE: the ORDER command is tested before the generic "order" keyword.
+  // In main.py these are the other way round, which makes process_order()
+  // unreachable — every "order X 2" returns the instructions instead.
+  if (q.startsWith("order ") && q.split(/\s+/).length >= 3) return processOrder(q);
+  if (q.startsWith("address:")) {
+    address = raw.replace(/address:/i,"").trim();
+    return { text:"Delivery address saved:\n" + address + "\n\nYou can now place orders for delivery." };
+  }
+  if (q.includes("menu"))   return { text:menuHeader(), block:menuBlock() };
+  if (q === "order" || q.includes("want to order") || (q.includes("order") && q.split(/\s+/).length < 3))
+    return { text:"To order, send:\nORDER [item] [quantity]\n\nExample: ORDER fried rice 2\n\nType MENU to see items." };
+  if (q.includes("status")) return statusReply();
+  if (q.includes("delivery") || q.includes("address"))
+    return { text:"Please send your delivery address in this format:\nAddress: [your full address]" };
+  if (q.includes("hours") || q.includes("open") || q.includes("close"))
+    return { text:cfg.shop + " is open " + cfg.hours + "." };
+  if (q.includes("pay"))  return { text:cfg.payment + "." };
+  if (q.includes("how far") || q.includes("deliver to") || q.includes("zone"))
+    return { text:"Delivery is " + money(num(cfg.fee)) + ". We cover " + cfg.zone + "." };
+  if (/^(hi|hey|hello|help|good (morning|afternoon|evening))\b/.test(q) || q === "hi")
+    return { text:cfg.greeting };
+
+  return { text:"I'm not sure I understand. Type HELP to see what I can do." };
+}
+
+function statusReply(){
+  if (!orders.length) return { text:"You have no recent orders. Type MENU to order!" };
+  return { text:"Your recent orders:", block:el("div",{}, orders.slice(0,5).map(o => ticketBlock(o, true))) };
+}
+
+/* ── rendering ────────────────────────────────────────────────────── */
+const menuHeader = () => cfg.shop.toUpperCase() + " MENU";
+
 function menuBlock(){
-  return el("div",{className:"mlist"}, cfg.menu.filter(m => m.name.trim()).map(m =>
-    el("div",{className:"mrow"},
-      el("span",{className:"nm"}, m.name, m.note ? el("span",{className:"nt", textContent:m.note}) : null),
+  const cats = [];
+  for (const m of cfg.menu){ if (!m.name.trim()) continue;
+    let g = cats.find(c => c.cat === (m.cat || "Menu"));
+    if (!g) cats.push(g = { cat:m.cat || "Menu", items:[] });
+    g.items.push(m);
+  }
+  return el("div",{className:"mlist"}, cats.map(g => [
+    el("div",{className:"mrow", style:"margin-top:4px"},
+      el("span",{className:"nm", style:"font-weight:600;text-transform:uppercase;font-size:11.5px;letter-spacing:.1em", textContent:g.cat})),
+    g.items.map(m => el("div",{className:"mrow"},
+      el("span",{className:"nm"}, m.name, m.desc ? el("span",{className:"nt", textContent:m.desc}) : null),
       el("span",{className:"pr", textContent:money(num(m.price))})
-    )));
+    ))
+  ]).concat([
+    el("div",{className:"mrow", style:"margin-top:6px"},
+      el("span",{className:"nm nt", textContent:"To order: ORDER [item] [quantity] — e.g. ORDER fried rice 2"}))
+  ]));
 }
 
-function ticketBlock(o, statusKey){
-  const L = t();
+function ticketBlock(o, compact){
   const kids = [
     el("div",{className:"tk-top"},
-      el("span",{className:"tk-num", textContent:"#" + o.no}),
-      el("span",{className:"pill s-" + statusKey,
-        textContent: statusKey === "preparing" ? (cfg.lang === "es" ? "Preparando" : "Preparing")
-                                               : (cfg.lang === "es" ? "En camino" : "On the way")})
+      el("span",{className:"tk-num", textContent:"#" + o.id}),
+      el("span",{className:"pill s-preparing", textContent:o.status.toUpperCase()}),
+      compact ? el("span",{className:"pr", style:"margin-left:auto", textContent:clock(o.at)}) : null
     ),
-    el("div",{className:"tk-lines"}, o.lines.map(l =>
+    el("div",{className:"tk-lines"},
       el("div",{className:"tk-line"},
-        el("span",{className:"q", textContent:l.qty + "×"}),
-        el("span",{className:"n", textContent:l.name}),
-        el("span",{className:"p", textContent:money(num(l.price) * l.qty)})
-      ))),
+        el("span",{className:"q", textContent:o.qty + "×"}),
+        el("span",{className:"n", textContent:o.item}),
+        el("span",{className:"p", textContent:money(o.price * o.qty)}))),
     el("div",{className:"tk-sum"},
-      el("div",{}, el("span",{textContent:L.subtotal}),  el("span",{textContent:money(o.sub)})),
-      el("div",{}, el("span",{textContent:L.feeLbl}),    el("span",{textContent:money(o.fee)})),
-      el("div",{className:"tot"}, el("span",{textContent:L.total}), el("span",{textContent:money(o.tot)}))
-    )
+      el("div",{}, el("span",{textContent:"Subtotal"}), el("span",{textContent:money(o.price * o.qty)})),
+      el("div",{}, el("span",{textContent:"Delivery"}), el("span",{textContent:money(num(cfg.fee))})),
+      el("div",{className:"tot"}, el("span",{textContent:"Total"}), el("span",{textContent:money(o.total)})))
   ];
-  if (o.driver){
-    kids.push(el("div",{className:"tk-drv"},
-      el("span",{className:"tk-k", textContent:L.driverLbl}),
-      el("span",{className:"unit", textContent:"#" + o.driver.unit}),
-      el("span",{className:"drv-name", textContent:o.driver.name})
-    ));
-  }
+  if (o.driver) kids.push(el("div",{className:"tk-drv"},
+    el("span",{className:"tk-k", textContent:"Driver assigned"}),
+    el("span",{className:"unit", textContent:"#" + o.driver.unit}),
+    el("span",{className:"drv-name", textContent:o.driver.name})));
+  if (!compact) kids.push(el("div",{className:"tk-drv"},
+    el("span",{className:"tk-k", textContent:"Estimated delivery"}),
+    el("span",{className:"drv-name", style:"font-weight:400", textContent:cfg.eta})));
   return el("div",{className:"ticket"}, kids);
-}
-
-function cartBlock(){
-  const L = t();
-  return el("div",{className:"ticket"},
-    el("div",{className:"tk-lines"}, cart.map(l =>
-      el("div",{className:"tk-line"},
-        el("span",{className:"q", textContent:l.qty + "×"}),
-        el("span",{className:"n", textContent:l.name}),
-        el("span",{className:"p", textContent:money(num(l.price) * l.qty)})
-      ))),
-    el("div",{className:"tk-sum"},
-      el("div",{}, el("span",{textContent:L.subtotal}), el("span",{textContent:money(subtotal())})),
-      el("div",{}, el("span",{textContent:L.feeLbl}),   el("span",{textContent:money(feeNum())})),
-      el("div",{className:"tot"}, el("span",{textContent:L.total}), el("span",{textContent:money(total())}))
-    ));
-}
-
-/* ── the bot ──────────────────────────────────────────────────────── */
-function answer(raw){
-  const q = norm(raw), L = t();
-  const has = (...ws) => ws.some(w => q.includes(w));
-
-  // 1. confirm an order that has something in it
-  if (has("confirmar","confirmo","confirm","listo","ya esta","eso es todo","that's it","thats all","checkout","pagar")){
-    if (!cart.length) return { text:L.cartEmpty };
-    const o = placeOrder();
-    return { text:L.placed + (o.driver ? "" : "\n\n" + L.noDriver), block:ticketBlock(o,"preparing") };
-  }
-
-  // 2. answers you wrote in the panel — an answer you set explicitly beats
-  // fuzzy menu matching, so "no meat" doesn't order the meat pie
-  for (const a of cfg.answers){
-    const trigs = a.trigger.split(",").map(x => norm(x)).filter(Boolean);
-    if (trigs.length && trigs.some(x => q.includes(x)) && a.reply.trim()) return { text:a.reply };
-  }
-
-  // 3. anything on the menu, by name — this is the ordering path
-  const hits = parseItems(q);
-  if (hits.length && !has("cuanto cuesta","how much is the","precio de")){
-    addToCart(hits);
-    const n = hits.reduce((s,h) => s + h.qty, 0);
-    return { text:L.added(n) + "\n" + L.cartHead + "\n" + L.confirmHint, block:cartBlock() };
-  }
-
-  // 4. built-ins
-  if (has("menu","carta","que tienen","que venden","what do you have","catalogo"))
-    return { text:L.menuIntro(cfg.shop), block:menuBlock() };
-
-  // tracking is checked before the cart, so "¿dónde va mi pedido?" reads as
-  // tracking rather than matching "mi pedido" and showing an empty cart
-  if (has("donde va","donde esta","status","estado","rastrear","track","ya viene","how long",
-          "where is my","where's my","wheres my","where my","on the way","eta","ready yet")){
-    if (order) return { text:L.statusHead, block:ticketBlock(order,"on-the-way") };
-    if (cart.length) return { text:L.cartHead + "\n" + L.confirmHint, block:cartBlock() };
-    return { text:L.statusNone };
-  }
-
-  if (has("mi pedido","mi orden","carrito","cart","my order","cuanto llevo","total"))
-    return cart.length ? { text:L.cartHead + "\n" + L.confirmHint, block:cartBlock() } : { text:L.cartEmpty };
-
-  if (has("envio","domicilio","deliver","shipping","how far","cuanto cobran por"))
-    return { text:L.fee(cfg.currency, num(cfg.fee).toFixed(0), cfg.zone) };
-
-  if (has("horario","abren","cierran","hora","hours","open","close"))
-    return { text:L.hours(cfg.shop, cfg.hours) };
-
-  if (has("pago","pagar con","tarjeta","efectivo","transferencia","payment","pay with","cash","card"))
-    return { text:L.pay(cfg.payment) };
-
-  if (has("zona","cobertura","llegan a","area","cover"))
-    return { text:L.fee(cfg.currency, num(cfg.fee).toFixed(0), cfg.zone) };
-
-  if (has("humano","persona","hablar con","agente","llamar","human","someone","agent","call"))
-    return { text:L.human(cfg.phone, cfg.hours) };
-
-  if (/^(hola|buenas|buenos dias|buenas tardes|hi|hey|hello|good (morning|afternoon|evening))\b/.test(q))
-    return { text:cfg.greeting[cfg.lang] || cfg.greeting.es };
-
-  if (has("gracias","thank")) return { text:L.thanks };
-
-  return { text:L.fallback };
 }
 
 /* ── transcript ───────────────────────────────────────────────────── */
 const log = $("log");
 const scroll = () => { log.scrollTop = log.scrollHeight; };
-
 function push(who, text, block){
   const b = el("div",{className:"msg " + who, textContent:text});
   if (block) b.append(block);
   log.append(b); scroll();
 }
 function sysline(text){ log.append(el("div",{className:"sysline", textContent:text})); scroll(); }
-
 function ask(text){
   push("me", text);
   const typing = el("div",{className:"typing"}, el("i"), el("i"), el("i"));
   log.append(typing); scroll();
-  setTimeout(() => {
-    typing.remove();
-    const a = answer(text);
-    push("bot", a.text, a.block);
-  }, 430 + Math.random()*260);
+  setTimeout(() => { typing.remove(); const a = answer(text); push("bot", a.text, a.block); }, 430 + Math.random()*240);
 }
 
 /* ── chrome ───────────────────────────────────────────────────────── */
 function paintChrome(){
-  const L = t();
   $("shopName").textContent = cfg.shop || "";
   $("botName").textContent  = cfg.bot || "";
   $("mark").textContent     = initials(cfg.shop || cfg.bot || "??");
-  $("entry").placeholder    = L.placeholder;
-  $("sendBtn").textContent  = L.send;
-  $("langEs").setAttribute("aria-pressed", String(cfg.lang === "es"));
-  $("langEn").setAttribute("aria-pressed", String(cfg.lang === "en"));
-
-  const chips = $("chips");
-  chips.textContent = "";
   const first = cfg.menu.find(m => m.name.trim());
-  const list = [L.chips.menu, first ? L.chips.order(first.name) : null, L.chips.fee, L.chips.confirm].filter(Boolean);
+  const list = ["MENU", first ? "ORDER " + first.name.replace(/\s*\(.*?\)/,"") + " 2" : null, "STATUS", "HELP"].filter(Boolean);
+  const chips = $("chips"); chips.textContent = "";
   for (const s of list) chips.append(el("button",{className:"chip", type:"button", textContent:s, onclick(){ ask(s); }}));
   $("jsonOut").textContent = JSON.stringify(cfg, null, 2);
 }
 
-/* ── console ──────────────────────────────────────────────────────── */
 let noteTimer, saveTimer;
 function touched(){
   paintChrome();
   clearTimeout(saveTimer); saveTimer = setTimeout(saveCfg, 250);
   clearTimeout(noteTimer);
-  noteTimer = setTimeout(() => { if (log.children.length) sysline(t().updated); }, 1100);
+  noteTimer = setTimeout(() => { if (log.children.length) sysline("setup updated"); }, 1100);
 }
-
-function syncFields(){
-  for (const inp of document.querySelectorAll("[data-k]")) inp.value = cfg[inp.dataset.k] || "";
-  $("f-greeting").value = cfg.greeting[cfg.lang] || "";
-}
-for (const inp of document.querySelectorAll("[data-k]")){
+function syncFields(){ for (const inp of document.querySelectorAll("[data-k]")) inp.value = cfg[inp.dataset.k] || ""; }
+for (const inp of document.querySelectorAll("[data-k]"))
   inp.addEventListener("input", () => { cfg[inp.dataset.k] = inp.value; touched(); });
-}
-$("f-greeting").addEventListener("input", e => { cfg.greeting[cfg.lang] = e.target.value; touched(); });
 
 function buildMenu(){
   const host = $("menu"); host.textContent = "";
   cfg.menu.forEach((m,i) => {
-    const nm = el("input",{type:"text", value:m.name,  "aria-label":"Item name"});
-    const pr = el("input",{type:"text", value:m.price, className:"mono", "aria-label":"Price", inputMode:"decimal"});
-    const nt = el("input",{type:"text", value:m.note,  "aria-label":"Note", placeholder:"note (optional)"});
+    const cat = el("input",{type:"text", value:m.cat || "", "aria-label":"Course", placeholder:"course"});
+    const nm  = el("input",{type:"text", value:m.name, "aria-label":"Item name"});
+    const pr  = el("input",{type:"text", value:m.price, className:"mono", "aria-label":"Price", inputMode:"decimal"});
+    const ds  = el("input",{type:"text", value:m.desc || "", "aria-label":"Description", placeholder:"description"});
     const kill = el("button",{className:"kill", type:"button", textContent:"×", "aria-label":"Remove item",
       onclick(){ cfg.menu.splice(i,1); buildMenu(); touched(); }});
-    nm.oninput = () => { m.name = nm.value; touched(); };
-    pr.oninput = () => { m.price = pr.value; touched(); };
-    nt.oninput = () => { m.note = nt.value; touched(); };
-    host.append(el("div",{className:"row"}, el("div",{className:"r-main"}, nm, pr, kill), el("div",{className:"r-sub"}, nt)));
+    cat.oninput = () => { m.cat = cat.value; touched(); };
+    nm.oninput  = () => { m.name = nm.value; touched(); };
+    pr.oninput  = () => { m.price = pr.value; touched(); };
+    ds.oninput  = () => { m.desc = ds.value; touched(); };
+    host.append(el("div",{className:"row"},
+      el("div",{className:"r-main"}, nm, pr, kill),
+      el("div",{className:"r-main", style:"grid-template-columns:120px minmax(0,1fr)"}, cat, ds)));
   });
 }
 
@@ -662,7 +520,7 @@ function buildDrivers(){
     const un = el("input",{type:"text", value:d.unit, className:"mono", "aria-label":"Driver number"});
     const nm = el("input",{type:"text", value:d.name, "aria-label":"Driver name"});
     const st = el("select",{"aria-label":"Status"},
-      DRV_STATUS.map(s => el("option",{value:s, textContent:(DRV_LABEL[cfg.lang] || DRV_LABEL.es)[s], selected:s === d.status})));
+      DRV_STATUS.map(s => el("option",{value:s, textContent:DRV_LABEL[s], selected:s === d.status})));
     const kill = el("button",{className:"kill", type:"button", textContent:"×", "aria-label":"Remove driver",
       onclick(){ cfg.drivers.splice(i,1); buildDrivers(); touched(); }});
     un.oninput = () => { d.unit = un.value; touched(); };
@@ -672,58 +530,30 @@ function buildDrivers(){
   });
 }
 
-function buildAnswers(){
-  const host = $("answers"); host.textContent = "";
-  cfg.answers.forEach((a,i) => {
-    const tr = el("input",{type:"text", value:a.trigger, "aria-label":"Trigger words"});
-    const bd = el("textarea",{value:a.reply, "aria-label":"Reply"});
-    const kill = el("button",{className:"kill", type:"button", textContent:"×", "aria-label":"Remove answer",
-      onclick(){ cfg.answers.splice(i,1); buildAnswers(); touched(); }});
-    tr.oninput = () => { a.trigger = tr.value; touched(); };
-    bd.oninput = () => { a.reply  = bd.value;  touched(); };
-    host.append(el("div",{className:"row"},
-      el("div",{className:"r-main", style:"grid-template-columns:minmax(0,1fr) 34px"},
-        el("label",{}, el("span",{className:"lab", textContent:"If they say"}), tr), kill),
-      el("label",{}, el("span",{className:"lab", textContent:"Answer with"}), bd)));
-  });
-}
-
-$("addItem").onclick   = () => { cfg.menu.push({ name:"", price:"0", note:"" }); buildMenu(); touched(); };
-$("addAnswer").onclick = () => { cfg.answers.push({ trigger:"", reply:"" }); buildAnswers(); touched(); };
+$("addItem").onclick = () => { cfg.menu.push({ cat:"Mains", name:"", price:"0", desc:"" }); buildMenu(); touched(); };
 $("addDriver").onclick = () => {
   const next = String(Math.max(0, ...cfg.drivers.map(d => parseInt(d.unit,10) || 0)) + 1).padStart(2,"0");
-  cfg.drivers.push({ unit:next, name:"", status:"available" });
-  buildDrivers(); touched();
+  cfg.drivers.push({ unit:next, name:"", status:"available" }); buildDrivers(); touched();
 };
 
-function setLang(l){ cfg.lang = l; syncFields(); buildDrivers(); touched(); }
-$("langEs").onclick = () => setLang("es");
-$("langEn").onclick = () => setLang("en");
-
-function toast(msg){
-  const el2 = $("toast"); el2.textContent = msg; el2.classList.add("on");
-  setTimeout(() => el2.classList.remove("on"), 1900);
-}
+function toast(msg){ const n = $("toast"); n.textContent = msg; n.classList.add("on"); setTimeout(() => n.classList.remove("on"), 1900); }
 $("copyJson").onclick = async () => {
   try { await navigator.clipboard.writeText(JSON.stringify(cfg, null, 2)); toast("Setup copied to clipboard"); }
   catch(e){ toast("Couldn't reach the clipboard — the panel below has it"); }
 };
 $("reset").onclick = () => {
-  cfg = structuredClone(PITCH_CONFIG); cart = []; order = null;
-  saveCfg(); syncFields(); buildMenu(); buildDrivers(); buildAnswers(); paintChrome();
-  log.textContent = "";
-  push("bot", cfg.greeting[cfg.lang]);
-  toast("Back to the demo setup");
+  cfg = structuredClone(PITCH_CONFIG); orders = []; address = null;
+  saveCfg(); syncFields(); buildMenu(); buildDrivers(); paintChrome();
+  log.textContent = ""; push("bot", cfg.greeting); toast("Back to the demo setup");
 };
 $("composer").addEventListener("submit", e => {
   e.preventDefault();
   const v = $("entry").value.trim();
   if (!v) return;
-  $("entry").value = "";
-  ask(v);
+  $("entry").value = ""; ask(v);
 });
 
 /* ── go ───────────────────────────────────────────────────────────── */
-syncFields(); buildMenu(); buildDrivers(); buildAnswers(); paintChrome();
-push("bot", cfg.greeting[cfg.lang] || cfg.greeting.es);
+syncFields(); buildMenu(); buildDrivers(); paintChrome();
+push("bot", cfg.greeting);
 </script>
