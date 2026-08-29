@@ -1,43 +1,49 @@
 <meta charset="utf-8">
-<title>Dispatch Desk</title>
+<title>Pedidos Bot</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600;700&family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:ital,wght@0,400;0,500;0,600;1,400&display=swap">
 <style>
 :root{
   color-scheme: light;
-  --ground:#E9ECF0; --surface:#FFFFFF; --surface-2:#F4F6F9;
-  --ink:#141C25; --ink-2:#5B6675; --ink-3:#8A94A2;
-  --line:#D2D8E0; --line-soft:#E3E8EE;
-  --accent:#17527C; --accent-soft:#E4EDF5; --accent-ink:#FFFFFF;
-  --signal:#A5610C; --signal-soft:#F7EAD6;
-  --good:#256B4E;   --good-soft:#DDEDE5;
-  --halt:#8E2F2F;   --halt-soft:#F5DEDE;
-  --shadow:0 1px 2px rgba(20,28,37,.06), 0 10px 28px -14px rgba(20,28,37,.22);
+  --ground:#ECEFEA; --surface:#FFFFFF; --surface-2:#F3F6F2; --thread:#E6EAE2;
+  --ink:#16201B; --ink-2:#5C6862; --ink-3:#8B958F;
+  --line:#D4DAD5; --line-soft:#E4E9E5;
+  --accent:#14795A; --accent-soft:#DFF0E7; --accent-ink:#FFFFFF;
+  --mine:#D3EDDC; --mine-ink:#0E3A2B;
+  --info:#1F6FA8;  --info-soft:#E2EEF8;
+  --signal:#A8690F; --signal-soft:#F8EBD8;
+  --good:#2C7A4B;  --good-soft:#E0F0E6;
+  --halt:#8E3030;  --halt-soft:#F6DFDF;
+  --shadow:0 1px 2px rgba(22,32,27,.06), 0 10px 28px -14px rgba(22,32,27,.22);
   --radius:10px;
 }
 @media (prefers-color-scheme: dark){
   :root:not([data-theme="light"]){
     color-scheme: dark;
-    --ground:#0F141A; --surface:#171E26; --surface-2:#1E2731;
-    --ink:#E6EBF1; --ink-2:#9AA6B4; --ink-3:#6E7A88;
-    --line:#2C3742; --line-soft:#232C36;
-    --accent:#6BAEE0; --accent-soft:#1B2C3B; --accent-ink:#0F141A;
-    --signal:#DFA24A; --signal-soft:#33281A;
-    --good:#63C39B;   --good-soft:#16302A;
-    --halt:#E58A8A;   --halt-soft:#35211F;
+    --ground:#101512; --surface:#181F1A; --surface-2:#1F2822; --thread:#131916;
+    --ink:#E7ECE8; --ink-2:#9BA69F; --ink-3:#6D7872;
+    --line:#2C3630; --line-soft:#222B26;
+    --accent:#57BC92; --accent-soft:#163025; --accent-ink:#0B1310;
+    --mine:#1D3B2E; --mine-ink:#D9EFE3;
+    --info:#6BAEE0;  --info-soft:#172834;
+    --signal:#DFA24A; --signal-soft:#2E2418;
+    --good:#63C39B;  --good-soft:#16302A;
+    --halt:#E58A8A;  --halt-soft:#33201E;
     --shadow:0 1px 2px rgba(0,0,0,.4), 0 10px 28px -14px rgba(0,0,0,.7);
   }
 }
 :root[data-theme="dark"]{
   color-scheme: dark;
-  --ground:#0F141A; --surface:#171E26; --surface-2:#1E2731;
-  --ink:#E6EBF1; --ink-2:#9AA6B4; --ink-3:#6E7A88;
-  --line:#2C3742; --line-soft:#232C36;
-  --accent:#6BAEE0; --accent-soft:#1B2C3B; --accent-ink:#0F141A;
-  --signal:#DFA24A; --signal-soft:#33281A;
-  --good:#63C39B;   --good-soft:#16302A;
-  --halt:#E58A8A;   --halt-soft:#35211F;
+  --ground:#101512; --surface:#181F1A; --surface-2:#1F2822; --thread:#131916;
+  --ink:#E7ECE8; --ink-2:#9BA69F; --ink-3:#6D7872;
+  --line:#2C3630; --line-soft:#222B26;
+  --accent:#57BC92; --accent-soft:#163025; --accent-ink:#0B1310;
+  --mine:#1D3B2E; --mine-ink:#D9EFE3;
+  --info:#6BAEE0;  --info-soft:#172834;
+  --signal:#DFA24A; --signal-soft:#2E2418;
+  --good:#63C39B;  --good-soft:#16302A;
+  --halt:#E58A8A;  --halt-soft:#33201E;
   --shadow:0 1px 2px rgba(0,0,0,.4), 0 10px 28px -14px rgba(0,0,0,.7);
 }
 
@@ -47,242 +53,218 @@ body{
   font:400 15px/1.55 "IBM Plex Sans", ui-sans-serif, system-ui, sans-serif;
   -webkit-font-smoothing:antialiased;
 }
-.wrap{max-width:1160px; margin:0 auto; padding:clamp(20px,4vw,44px) clamp(16px,3vw,28px) 72px;}
+.wrap{max-width:1160px; margin:0 auto; padding:clamp(20px,4vw,44px) clamp(16px,3vw,28px) 72px}
 
-/* ── masthead ─────────────────────────────── */
-.mast{display:flex; flex-wrap:wrap; align-items:flex-end; gap:16px 28px; padding-bottom:18px; border-bottom:1px solid var(--line); margin-bottom:clamp(20px,3vw,30px);}
+.mast{display:flex; flex-wrap:wrap; align-items:flex-end; gap:16px 28px; padding-bottom:18px; border-bottom:1px solid var(--line); margin-bottom:clamp(20px,3vw,30px)}
 .mast-id{flex:1 1 320px; min-width:0}
 .eyebrow{
-  font-family:"Barlow Condensed", ui-sans-serif, sans-serif;
-  font-weight:600; font-size:13px; letter-spacing:.16em; text-transform:uppercase;
-  color:var(--accent); display:flex; align-items:center; gap:8px; margin-bottom:6px;
+  font-family:"Barlow Condensed", ui-sans-serif, sans-serif; font-weight:600; font-size:13px;
+  letter-spacing:.16em; text-transform:uppercase; color:var(--accent);
+  display:flex; align-items:center; gap:8px; margin-bottom:6px;
 }
 .eyebrow::before{content:""; width:22px; height:2px; background:var(--accent); display:block}
-h1{
-  font-family:"Barlow Condensed", ui-sans-serif, sans-serif;
-  font-weight:700; font-size:clamp(34px,5.4vw,50px); line-height:1.02;
-  letter-spacing:-.01em; margin:0; text-wrap:balance;
-}
+h1{font-family:"Barlow Condensed", ui-sans-serif, sans-serif; font-weight:700; font-size:clamp(34px,5.4vw,50px); line-height:1.02; letter-spacing:-.01em; margin:0; text-wrap:balance}
 .mast-note{flex:1 1 300px; max-width:46ch; color:var(--ink-2); font-size:14px; margin:0}
 .mast-note b{color:var(--ink); font-weight:600}
 
-/* ── stage ────────────────────────────────── */
 .stage{display:grid; gap:clamp(18px,2.6vw,26px); grid-template-columns:minmax(0,1fr)}
 @media (min-width:980px){
-  .stage{grid-template-columns:388px minmax(0,1fr); align-items:start}
+  .stage{grid-template-columns:392px minmax(0,1fr); align-items:start}
   .handset{position:sticky; top:24px}
 }
-
 .panel{background:var(--surface); border:1px solid var(--line); border-radius:var(--radius); box-shadow:var(--shadow)}
 
-/* ── chat handset ─────────────────────────── */
-.handset{display:flex; flex-direction:column; overflow:hidden; min-height:540px}
-.hs-head{display:flex; align-items:center; gap:11px; padding:13px 15px; border-bottom:1px solid var(--line); background:var(--surface-2); border-radius:var(--radius) var(--radius) 0 0}
-.hs-mark{
-  width:36px; height:36px; flex:none; border-radius:8px; background:var(--accent); color:var(--accent-ink);
-  display:grid; place-items:center;
-  font-family:"Barlow Condensed", sans-serif; font-weight:700; font-size:17px; letter-spacing:.02em;
-}
-.hs-who{min-width:0; flex:1}
-.hs-agent{font-weight:600; font-size:14.5px; line-height:1.2; white-space:nowrap; overflow:hidden; text-overflow:ellipsis}
-.hs-co{font-size:12px; color:var(--ink-2); display:flex; align-items:center; gap:6px; margin-top:2px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis}
-.dot{width:6px; height:6px; border-radius:50%; background:var(--good); flex:none}
+/* ── the thread ───────────────────────────── */
+.handset{display:flex; flex-direction:column; overflow:hidden}
+.hs-head{display:flex; align-items:center; gap:11px; padding:11px 14px; border-bottom:1px solid var(--line); background:var(--accent); border-radius:var(--radius) var(--radius) 0 0}
+.hs-mark{width:38px; height:38px; flex:none; border-radius:50%; background:var(--accent-ink); color:var(--accent); display:grid; place-items:center; font-family:"Barlow Condensed",sans-serif; font-weight:700; font-size:16px}
+.hs-who{min-width:0; flex:1; color:var(--accent-ink)}
+.hs-shop{font-weight:600; font-size:14.5px; line-height:1.2; white-space:nowrap; overflow:hidden; text-overflow:ellipsis}
+.hs-meta{font-size:11.5px; opacity:.85; display:flex; align-items:center; gap:5px; margin-top:2px}
+.hs-meta .dot{width:6px; height:6px; border-radius:50%; background:currentColor; flex:none}
+.hs-chan{font-family:"Barlow Condensed",sans-serif; font-weight:600; font-size:11px; letter-spacing:.12em; text-transform:uppercase; color:var(--accent-ink); opacity:.8; border:1px solid currentColor; padding:2px 6px; border-radius:4px; flex:none}
 
-.log{flex:1; overflow-y:auto; padding:18px 15px; display:flex; flex-direction:column; gap:11px; max-height:52vh; min-height:300px}
-@media (min-width:980px){ .log{max-height:none; height:400px} }
-.msg{max-width:88%; padding:9px 12px; border-radius:12px; font-size:14.5px; line-height:1.5; white-space:pre-wrap; word-wrap:break-word; animation:rise .22s ease both}
-.msg.bot{align-self:flex-start; background:var(--surface-2); border:1px solid var(--line-soft); border-bottom-left-radius:4px}
-.msg.me{align-self:flex-end; background:var(--accent); color:var(--accent-ink); border-bottom-right-radius:4px}
-@keyframes rise{from{opacity:0; transform:translateY(5px)} to{opacity:1; transform:none}}
+.log{flex:1; overflow-y:auto; padding:16px 14px; display:flex; flex-direction:column; gap:9px; background:var(--thread); max-height:56vh; min-height:320px}
+@media (min-width:980px){ .log{max-height:none; height:430px} }
+.msg{max-width:86%; padding:8px 11px; border-radius:11px; font-size:14.5px; line-height:1.48; white-space:pre-wrap; overflow-wrap:anywhere; animation:rise .2s ease both; box-shadow:0 1px 1px rgba(0,0,0,.06)}
+.msg.bot{align-self:flex-start; background:var(--surface); border-top-left-radius:3px}
+.msg.me{align-self:flex-end; background:var(--mine); color:var(--mine-ink); border-top-right-radius:3px}
+@keyframes rise{from{opacity:0; transform:translateY(4px)} to{opacity:1; transform:none}}
+.sysline{align-self:center; background:var(--surface-2); border:1px solid var(--line-soft); color:var(--ink-3); font-size:10.5px; letter-spacing:.1em; text-transform:uppercase; font-family:"Barlow Condensed",sans-serif; font-weight:600; padding:3px 10px; border-radius:20px}
 
-.sysline{display:flex; align-items:center; gap:9px; color:var(--ink-3); font-size:11px; letter-spacing:.1em; text-transform:uppercase; font-family:"Barlow Condensed",sans-serif; font-weight:600; margin:2px 0}
-.sysline::before,.sysline::after{content:""; height:1px; background:var(--line); flex:1}
+/* menu + receipt blocks inside bubbles */
+.mlist{margin-top:8px; border-top:1px solid var(--line-soft); padding-top:7px; display:flex; flex-direction:column; gap:5px}
+.mrow{display:flex; align-items:baseline; gap:8px; font-size:13.5px}
+.mrow .nm{flex:1; min-width:0; overflow-wrap:anywhere}
+.mrow .pr{font-family:"IBM Plex Mono",ui-monospace,monospace; font-size:12.5px; font-variant-numeric:tabular-nums; color:var(--ink-2); flex:none}
+.mrow .nt{display:block; font-size:11.5px; color:var(--ink-3)}
 
-/* driver card inside a bubble */
-.dcard{margin-top:9px; border:1px solid var(--line); border-radius:8px; overflow:hidden; background:var(--surface)}
-.dcard + .dcard{margin-top:7px}
-.dc-top{display:flex; align-items:center; gap:7px 9px; flex-wrap:wrap; padding:8px 10px; border-bottom:1px solid var(--line-soft)}
-.unit{
-  font-family:"IBM Plex Mono", ui-monospace, monospace; font-weight:600; font-size:12px;
-  background:var(--accent-soft); color:var(--accent); padding:3px 7px; border-radius:5px;
-  letter-spacing:.03em; flex:none;
-}
-.dc-name{font-weight:600; font-size:14px; flex:1 1 auto; min-width:0; overflow-wrap:anywhere}
-.pill{
-  font-family:"Barlow Condensed",sans-serif; font-weight:600; font-size:11.5px; letter-spacing:.09em;
-  text-transform:uppercase; padding:3px 8px; border-radius:20px; flex:none;
-}
-.pill.s-on-route{background:var(--signal-soft); color:var(--signal)}
-.pill.s-loading {background:var(--accent-soft); color:var(--accent)}
-.pill.s-clear   {background:var(--good-soft);   color:var(--good)}
-.pill.s-delayed {background:var(--halt-soft);   color:var(--halt)}
-.dc-body{display:flex; gap:16px; padding:8px 10px; font-size:12.5px; color:var(--ink-2); flex-wrap:wrap}
-.dc-body span{display:block}
-.dc-k{font-family:"Barlow Condensed",sans-serif; font-weight:600; font-size:11px; letter-spacing:.1em; text-transform:uppercase; color:var(--ink-3)}
-.dc-v{color:var(--ink); font-size:13px; font-variant-numeric:tabular-nums}
+.ticket{margin-top:9px; border:1px solid var(--line); border-radius:8px; overflow:hidden; background:var(--surface-2)}
+.tk-top{display:flex; align-items:center; gap:8px; flex-wrap:wrap; padding:8px 10px; background:var(--accent-soft); border-bottom:1px solid var(--line-soft)}
+.tk-num{font-family:"IBM Plex Mono",ui-monospace,monospace; font-weight:600; font-size:13px; color:var(--accent); letter-spacing:.02em}
+.pill{font-family:"Barlow Condensed",sans-serif; font-weight:600; font-size:11.5px; letter-spacing:.09em; text-transform:uppercase; padding:3px 8px; border-radius:20px; flex:none}
+.pill.s-preparing{background:var(--signal-soft); color:var(--signal); border:1px solid var(--signal)}
+.pill.s-on-the-way{background:var(--info-soft); color:var(--info); border:1px solid var(--info)}
+.pill.s-available{background:var(--good-soft); color:var(--good); border:1px solid var(--good)}
+.pill.s-delivering{background:var(--info-soft); color:var(--info); border:1px solid var(--info)}
+.pill.s-off{background:var(--halt-soft); color:var(--halt); border:1px solid var(--halt)}
+.tk-lines{padding:8px 10px; display:flex; flex-direction:column; gap:4px}
+.tk-line{display:flex; gap:8px; font-size:13.5px}
+.tk-line .q{font-family:"IBM Plex Mono",ui-monospace,monospace; color:var(--ink-3); flex:none; font-size:12.5px}
+.tk-line .n{flex:1; min-width:0; overflow-wrap:anywhere}
+.tk-line .p{font-family:"IBM Plex Mono",ui-monospace,monospace; font-variant-numeric:tabular-nums; flex:none; font-size:12.5px}
+.tk-sum{border-top:1px solid var(--line-soft); padding:7px 10px; display:flex; flex-direction:column; gap:3px}
+.tk-sum div{display:flex; justify-content:space-between; gap:10px; font-size:13px; color:var(--ink-2)}
+.tk-sum div.tot{font-weight:600; color:var(--ink); font-size:14.5px}
+.tk-sum span:last-child{font-family:"IBM Plex Mono",ui-monospace,monospace; font-variant-numeric:tabular-nums}
+.tk-drv{border-top:1px solid var(--line-soft); padding:8px 10px; display:flex; align-items:center; gap:8px; flex-wrap:wrap; background:var(--surface)}
+.tk-k{font-family:"Barlow Condensed",sans-serif; font-weight:600; font-size:10.5px; letter-spacing:.1em; text-transform:uppercase; color:var(--ink-3); width:100%}
+.unit{font-family:"IBM Plex Mono",ui-monospace,monospace; font-weight:600; font-size:12px; background:var(--accent-soft); color:var(--accent); padding:2px 7px; border-radius:5px; flex:none}
+.drv-name{font-weight:600; font-size:13.5px; flex:1 1 auto; min-width:0; overflow-wrap:anywhere}
 
-.typing{align-self:flex-start; display:flex; gap:4px; padding:12px 13px; background:var(--surface-2); border:1px solid var(--line-soft); border-radius:12px; border-bottom-left-radius:4px}
+.typing{align-self:flex-start; display:flex; gap:4px; padding:11px 12px; background:var(--surface); border-radius:11px; border-top-left-radius:3px}
 .typing i{width:6px; height:6px; border-radius:50%; background:var(--ink-3); animation:bounce 1.1s infinite ease-in-out}
 .typing i:nth-child(2){animation-delay:.15s} .typing i:nth-child(3){animation-delay:.3s}
 @keyframes bounce{0%,60%,100%{opacity:.35; transform:translateY(0)} 30%{opacity:1; transform:translateY(-4px)}}
 
-.chips{display:flex; flex-wrap:wrap; gap:6px; padding:0 15px 12px}
-.chip{
-  font:inherit; font-size:12.5px; padding:6px 11px; border-radius:20px; cursor:pointer;
-  background:transparent; color:var(--accent); border:1px solid var(--line);
-}
+.chips{display:flex; flex-wrap:wrap; gap:6px; padding:10px 14px 0; background:var(--thread)}
+.chip{font:inherit; font-size:12.5px; padding:6px 11px; border-radius:20px; cursor:pointer; background:var(--surface); color:var(--accent); border:1px solid var(--line)}
 .chip:hover{background:var(--accent-soft); border-color:var(--accent)}
-
-.composer{display:flex; gap:8px; padding:12px 15px; border-top:1px solid var(--line); background:var(--surface-2); border-radius:0 0 var(--radius) var(--radius)}
-.composer input{
-  flex:1; min-width:0; font:inherit; font-size:14.5px; padding:9px 12px;
-  border:1px solid var(--line); border-radius:8px; background:var(--surface); color:var(--ink);
-}
-.send{
-  font-family:"Barlow Condensed",sans-serif; font-weight:600; font-size:15px; letter-spacing:.06em; text-transform:uppercase;
-  padding:9px 17px; border:0; border-radius:8px; background:var(--accent); color:var(--accent-ink); cursor:pointer;
-}
+.composer{display:flex; gap:8px; padding:12px 14px; background:var(--thread); border-radius:0 0 var(--radius) var(--radius)}
+.composer input{flex:1; min-width:0; font:inherit; font-size:14.5px; padding:9px 13px; border:1px solid var(--line); border-radius:20px; background:var(--surface); color:var(--ink)}
+.send{font-family:"Barlow Condensed",sans-serif; font-weight:600; font-size:15px; letter-spacing:.06em; text-transform:uppercase; padding:9px 17px; border:0; border-radius:20px; background:var(--accent); color:var(--accent-ink); cursor:pointer}
 .send:hover{filter:brightness(1.08)}
 
 /* ── console ──────────────────────────────── */
 .console{padding:clamp(16px,2.4vw,24px)}
-.con-head{display:flex; align-items:baseline; justify-content:space-between; gap:14px; flex-wrap:wrap; margin-bottom:4px}
-.con-head h2{font-family:"Barlow Condensed",sans-serif; font-weight:700; font-size:25px; letter-spacing:.01em; margin:0}
-.con-sub{color:var(--ink-2); font-size:13.5px; margin:0 0 20px; max-width:62ch}
+.con-head{display:flex; align-items:center; justify-content:space-between; gap:14px; flex-wrap:wrap}
+.con-head h2{font-family:"Barlow Condensed",sans-serif; font-weight:700; font-size:25px; margin:0}
+.langsw{display:flex; gap:0; border:1px solid var(--line); border-radius:7px; overflow:hidden}
+.langsw button{font-family:"Barlow Condensed",sans-serif; font-weight:600; font-size:13px; letter-spacing:.08em; text-transform:uppercase; padding:6px 13px; border:0; background:var(--surface-2); color:var(--ink-2); cursor:pointer}
+.langsw button[aria-pressed="true"]{background:var(--accent); color:var(--accent-ink)}
+.con-sub{color:var(--ink-2); font-size:13.5px; margin:6px 0 20px; max-width:62ch}
 
 fieldset{border:0; padding:0; margin:0 0 22px}
-legend{
-  font-family:"Barlow Condensed",sans-serif; font-weight:600; font-size:12.5px; letter-spacing:.15em;
-  text-transform:uppercase; color:var(--ink-3); padding:0 0 9px; width:100%; border-bottom:1px solid var(--line-soft); margin-bottom:13px;
-}
+legend{font-family:"Barlow Condensed",sans-serif; font-weight:600; font-size:12.5px; letter-spacing:.15em; text-transform:uppercase; color:var(--ink-3); padding:0 0 9px; width:100%; border-bottom:1px solid var(--line-soft); margin-bottom:13px}
 legend b{color:var(--accent); font-weight:600}
 .grid{display:grid; gap:11px; grid-template-columns:1fr}
-@media (min-width:560px){ .grid.two{grid-template-columns:1fr 1fr} }
-label{display:block}
-.lab{font-family:"Barlow Condensed",sans-serif; font-weight:600; font-size:11.5px; letter-spacing:.1em; text-transform:uppercase; color:var(--ink-3); margin-bottom:4px}
-input[type=text], select, textarea{
-  width:100%; font:inherit; font-size:14px; padding:8px 10px;
-  border:1px solid var(--line); border-radius:7px; background:var(--surface-2); color:var(--ink);
-}
+@media (min-width:560px){ .grid.two{grid-template-columns:1fr 1fr} .grid.three{grid-template-columns:1fr 1fr 1fr} }
+.lab{display:block; font-family:"Barlow Condensed",sans-serif; font-weight:600; font-size:11.5px; letter-spacing:.1em; text-transform:uppercase; color:var(--ink-3); margin-bottom:4px}
+input[type=text], select, textarea{width:100%; font:inherit; font-size:14px; padding:8px 10px; border:1px solid var(--line); border-radius:7px; background:var(--surface-2); color:var(--ink)}
 textarea{resize:vertical; min-height:56px; line-height:1.45}
-input[type=text]:focus, select:focus, textarea:focus, .chip:focus-visible, button:focus-visible{
-  outline:2px solid var(--accent); outline-offset:2px;
-}
-.mono{font-family:"IBM Plex Mono", ui-monospace, monospace; font-size:13px}
+input:focus, select:focus, textarea:focus, .chip:focus-visible, button:focus-visible{outline:2px solid var(--accent); outline-offset:2px}
+.mono{font-family:"IBM Plex Mono",ui-monospace,monospace; font-size:13px}
 
-.crew{display:flex; flex-direction:column; gap:10px}
-.crewrow{border:1px solid var(--line-soft); border-radius:8px; padding:10px; background:var(--surface-2); display:grid; gap:8px}
-.crewrow .r1{display:grid; grid-template-columns:78px minmax(0,1fr) 34px; gap:8px; align-items:center}
-.crewrow .r2{display:grid; grid-template-columns:130px minmax(0,1fr); gap:8px}
-.kill{
-  border:1px solid var(--line); background:var(--surface); color:var(--ink-2); border-radius:7px;
-  height:34px; cursor:pointer; font-size:16px; line-height:1; display:grid; place-items:center;
-}
+.rows{display:flex; flex-direction:column; gap:10px}
+.row{border:1px solid var(--line-soft); border-radius:8px; padding:10px; background:var(--surface-2); display:grid; gap:8px}
+.row .r-main{display:grid; grid-template-columns:minmax(0,1fr) 92px 34px; gap:8px; align-items:center}
+.row .r-sub{display:grid; grid-template-columns:minmax(0,1fr); gap:8px}
+.row .r-drv{display:grid; grid-template-columns:74px minmax(0,1fr) 34px; gap:8px; align-items:center}
+.kill{border:1px solid var(--line); background:var(--surface); color:var(--ink-2); border-radius:7px; height:34px; cursor:pointer; font-size:16px; line-height:1; display:grid; place-items:center}
 .kill:hover{border-color:var(--halt); color:var(--halt)}
-
-.btn{
-  font-family:"Barlow Condensed",sans-serif; font-weight:600; font-size:14px; letter-spacing:.07em; text-transform:uppercase;
-  padding:8px 15px; border-radius:7px; cursor:pointer; border:1px solid var(--line);
-  background:var(--surface-2); color:var(--ink);
-}
+.btn{font-family:"Barlow Condensed",sans-serif; font-weight:600; font-size:14px; letter-spacing:.07em; text-transform:uppercase; padding:8px 15px; border-radius:7px; cursor:pointer; border:1px solid var(--line); background:var(--surface-2); color:var(--ink)}
 .btn:hover{border-color:var(--accent); color:var(--accent)}
 .btn.solid{background:var(--accent); color:var(--accent-ink); border-color:var(--accent)}
 .btn.solid:hover{filter:brightness(1.08); color:var(--accent-ink)}
 .row-actions{display:flex; flex-wrap:wrap; gap:8px; margin-top:12px}
 
 details.json{margin-top:6px; border:1px solid var(--line-soft); border-radius:8px; background:var(--surface-2)}
-details.json summary{
-  cursor:pointer; padding:10px 12px; font-family:"Barlow Condensed",sans-serif; font-weight:600;
-  font-size:12.5px; letter-spacing:.12em; text-transform:uppercase; color:var(--ink-2);
-}
+details.json summary{cursor:pointer; padding:10px 12px; font-family:"Barlow Condensed",sans-serif; font-weight:600; font-size:12.5px; letter-spacing:.12em; text-transform:uppercase; color:var(--ink-2)}
 details.json summary:hover{color:var(--accent)}
-details.json pre{
-  margin:0; padding:0 12px 12px; overflow-x:auto;
-  font-family:"IBM Plex Mono", ui-monospace, monospace; font-size:12px; line-height:1.6; color:var(--ink-2);
-}
+details.json pre{margin:0; padding:0 12px 12px; overflow-x:auto; font-family:"IBM Plex Mono",ui-monospace,monospace; font-size:12px; line-height:1.6; color:var(--ink-2)}
 .json-note{padding:0 12px 12px; margin:0; font-size:12.5px; color:var(--ink-3); max-width:60ch}
-
-.toast{
-  position:fixed; left:50%; bottom:22px; transform:translateX(-50%) translateY(14px);
-  background:var(--ink); color:var(--ground); padding:9px 16px; border-radius:20px;
-  font-size:13px; font-weight:500; opacity:0; pointer-events:none; transition:opacity .2s, transform .2s; z-index:9;
-}
+.toast{position:fixed; left:50%; bottom:22px; transform:translateX(-50%) translateY(14px); background:var(--ink); color:var(--ground); padding:9px 16px; border-radius:20px; font-size:13px; font-weight:500; opacity:0; pointer-events:none; transition:opacity .2s, transform .2s; z-index:9}
 .toast.on{opacity:1; transform:translateX(-50%)}
-
-@media (prefers-reduced-motion: reduce){
-  *{animation-duration:.001ms !important; animation-iteration-count:1 !important; transition-duration:.001ms !important}
-}
+@media (prefers-reduced-motion: reduce){ *{animation-duration:.001ms !important; animation-iteration-count:1 !important; transition-duration:.001ms !important} }
 </style>
 
 <div class="wrap">
   <header class="mast">
     <div class="mast-id">
       <div class="eyebrow">Live demo</div>
-      <h1>Dispatch Desk</h1>
+      <h1>Pedidos Bot</h1>
     </div>
-    <p class="mast-note">Everything the bot knows lives in the panel on the right. Change a name, a unit number, or an answer &mdash; it takes effect in the conversation <b>mid&#8209;conversation</b>, no reload. Nothing here calls out to a server.</p>
+    <p class="mast-note">An ordering bot for WhatsApp. Everything it knows &mdash; the menu, the prices, the drivers &mdash; is in the setup panel. Change it and the <b>conversation updates mid&#8209;chat</b>. Nothing calls out to a server.</p>
   </header>
 
   <div class="stage">
-
     <section class="panel handset" aria-label="Chat demo">
       <div class="hs-head">
-        <div class="hs-mark" id="mark">RF</div>
+        <div class="hs-mark" id="mark">SN</div>
         <div class="hs-who">
-          <div class="hs-agent" id="agentName">Dispatch Desk</div>
-          <div class="hs-co"><span class="dot"></span><span id="coName">Ridgeline Freight</span></div>
+          <div class="hs-shop" id="shopName">Sabor Norteño</div>
+          <div class="hs-meta"><span class="dot"></span><span id="botName">Pedidos</span></div>
         </div>
+        <span class="hs-chan">WhatsApp</span>
       </div>
       <div class="log" id="log" role="log" aria-live="polite" aria-label="Conversation"></div>
       <div class="chips" id="chips"></div>
       <form class="composer" id="composer">
-        <input id="entry" type="text" autocomplete="off" placeholder="Ask about a unit, a driver, a delivery&hellip;" aria-label="Your message">
-        <button class="send" type="submit">Send</button>
+        <input id="entry" type="text" autocomplete="off" aria-label="Your message">
+        <button class="send" type="submit" id="sendBtn">Send</button>
       </form>
     </section>
 
     <section class="panel console" aria-label="Live setup">
-      <div class="con-head"><h2>Live setup</h2></div>
-      <p class="con-sub">These are the fields you'd fill in from a client's own dispatch board. Edit any of them while they watch.</p>
+      <div class="con-head">
+        <h2>Live setup</h2>
+        <div class="langsw" role="group" aria-label="Bot language">
+          <button type="button" id="langEs" aria-pressed="true">Español</button>
+          <button type="button" id="langEn" aria-pressed="false">English</button>
+        </div>
+      </div>
+      <p class="con-sub">These are the fields you'd fill in from a client's own menu. Edit any of them while they watch &mdash; the bot changes on the next message.</p>
 
       <fieldset>
         <legend>1 &mdash; <b>The business</b></legend>
         <div class="grid two">
-          <label><span class="lab">Company</span><input type="text" id="f-company" data-k="company"></label>
-          <label><span class="lab">Agent name</span><input type="text" id="f-agent" data-k="agent"></label>
+          <label><span class="lab">Shop name</span><input type="text" id="f-shop" data-k="shop"></label>
+          <label><span class="lab">Bot name</span><input type="text" id="f-bot" data-k="bot"></label>
         </div>
         <div class="grid" style="margin-top:11px">
-          <label><span class="lab">Opening line</span><textarea id="f-greeting" data-k="greeting"></textarea></label>
+          <label><span class="lab">Opening message</span><textarea id="f-greeting"></textarea></label>
         </div>
       </fieldset>
 
       <fieldset>
-        <legend>2 &mdash; <b>The fleet</b> &mdash; unit numbers the bot answers to</legend>
-        <div class="crew" id="crew"></div>
+        <legend>2 &mdash; <b>The menu</b> &mdash; what they can order and what it costs</legend>
+        <div class="rows" id="menu"></div>
+        <div class="row-actions"><button class="btn" type="button" id="addItem">+ Add item</button></div>
+      </fieldset>
+
+      <fieldset>
+        <legend>3 &mdash; <b>The drivers</b> &mdash; assigned automatically on every order</legend>
+        <div class="rows" id="drivers"></div>
         <div class="row-actions"><button class="btn" type="button" id="addDriver">+ Add driver</button></div>
       </fieldset>
 
       <fieldset>
-        <legend>3 &mdash; <b>The details</b></legend>
-        <div class="grid two">
+        <legend>4 &mdash; <b>The rules</b></legend>
+        <div class="grid three">
+          <label><span class="lab">Currency</span><input type="text" id="f-cur" data-k="currency" class="mono"></label>
+          <label><span class="lab">Delivery fee</span><input type="text" id="f-fee" data-k="fee" class="mono"></label>
+          <label><span class="lab">Next order no.</span><input type="text" id="f-ord" data-k="orderNo" class="mono"></label>
+        </div>
+        <div class="grid two" style="margin-top:11px">
           <label><span class="lab">Hours</span><input type="text" id="f-hours" data-k="hours"></label>
           <label><span class="lab">Phone</span><input type="text" id="f-phone" data-k="phone" class="mono"></label>
         </div>
-        <div class="grid" style="margin-top:11px">
-          <label><span class="lab">Service area</span><input type="text" id="f-area" data-k="area"></label>
+        <div class="grid two" style="margin-top:11px">
+          <label><span class="lab">Payment accepted</span><input type="text" id="f-pay" data-k="payment"></label>
+          <label><span class="lab">Delivery zone</span><input type="text" id="f-zone" data-k="zone"></label>
         </div>
       </fieldset>
 
       <fieldset>
-        <legend>4 &mdash; <b>Answers you write</b></legend>
-        <div class="crew" id="answers"></div>
+        <legend>5 &mdash; <b>Answers you write</b></legend>
+        <div class="rows" id="answers"></div>
         <div class="row-actions"><button class="btn" type="button" id="addAnswer">+ Add answer</button></div>
       </fieldset>
 
       <details class="json">
         <summary>What this looks like to us</summary>
         <pre id="jsonOut"></pre>
-        <p class="json-note">On a real account this file is generated from your dispatch system every few minutes &mdash; nobody types it by hand.</p>
+        <p class="json-note">On a real account this comes straight out of your existing menu &mdash; nobody retypes it.</p>
       </details>
 
       <div class="row-actions">
@@ -290,7 +272,6 @@ details.json pre{
         <button class="btn" type="button" id="reset">Reset demo</button>
       </div>
     </section>
-
   </div>
 </div>
 <div class="toast" id="toast" role="status" aria-live="polite"></div>
@@ -301,261 +282,420 @@ details.json pre{
    Change a value, save the file, reload. Everything below is plumbing.
    ══════════════════════════════════════════════════════════════════════ */
 const PITCH_CONFIG = {
-  company:  "Ridgeline Freight",
-  agent:    "Dispatch Desk",
-  greeting: "Dispatch Desk here. Ask me about a unit, a driver, or where a delivery's at.",
-  hours:    "Mon–Fri 6:00a–8:00p · Sat 7:00a–2:00p",
-  phone:    "(555) 0142",
-  area:     "Metro and 60 miles out",
+  shop: "Sabor Norteño",
+  bot:  "Pedidos",
+  lang: "es",              // "es" or "en" — switchable live in the panel
+  currency: "$",
+  fee: "35",               // delivery fee, same currency
+  orderNo: "1042",         // next order number; ticks up on each order
+  hours: "Mar–Dom 12:00–22:00",
+  phone: "+52 55 1234 5678",
+  payment: "Efectivo, tarjeta y transferencia",
+  zone: "Centro y colonias vecinas, hasta 8 km",
 
-  // Unit numbers are what customers actually say on the phone. The bot
-  // matches on the number OR the driver's name, either one.
-  fleet: [
-    { unit:"12", name:"Rosa Delgado",   status:"on-route", stop:"Northgate Industrial", eta:"18 min" },
-    { unit:"07", name:"Marcus Bell",    status:"loading",  stop:"Yard — Dock 3",   eta:"Departs 2:10p" },
-    { unit:"23", name:"Tomás Ruiz",status:"clear",    stop:"—",               eta:"Available now" },
-    { unit:"31", name:"Dana Whitfield", status:"delayed",  stop:"Route 9 — traffic", eta:"+35 min" }
+  greeting: {
+    es: "¡Hola! Soy Pedidos de Sabor Norteño 🌮 Escríbeme lo que se te antoje y te lo mando. Pide el menú para ver todo.",
+    en: "Hi! This is Pedidos at Sabor Norteño. Tell me what you'd like and I'll get it out to you. Ask for the menu to see everything."
+  },
+
+  // The bot matches on these names, accent- and case-insensitively, and
+  // picks up quantities written as digits or words ("2 tacos", "dos tacos").
+  menu: [
+    { name:"Tacos al pastor",   price:"18",  note:"por pieza" },
+    { name:"Quesadilla",        price:"45",  note:"maíz o harina" },
+    { name:"Torta de milanesa", price:"85",  note:"" },
+    { name:"Agua de horchata",  price:"30",  note:"1 litro" }
+  ],
+
+  // Whoever is "available" gets assigned when an order is confirmed.
+  drivers: [
+    { unit:"04", name:"Rosa Delgado",  status:"available" },
+    { unit:"07", name:"Marcus Bell",   status:"delivering" },
+    { unit:"12", name:"Tomás Ruiz",    status:"available" }
   ],
 
   // Trigger words are comma-separated. First match wins.
   answers: [
-    { trigger:"refrigerated, reefer, cold, frozen",
-      reply:"Units 12 and 31 are reefer-equipped and hold −10°F to 40°F. Add the temperature to the booking and we'll assign one of those two." },
-    { trigger:"weekend, saturday, sunday",
-      reply:"Saturday runs go out until 2:00p. Sunday is emergency dispatch only — call the number and it pages the on-call driver." }
+    { trigger:"vegetariano, vegano, sin carne",
+      reply:"Sí — la quesadilla y la torta se pueden hacer sin carne, y el agua de horchata es vegana. Dime cuál quieres y lo anoto así." }
   ]
 };
 
-/* ── everything below is plumbing ─────────────────────────────────── */
-const STORE = "dispatch-desk-v1";
-const STATUSES = ["on-route","loading","clear","delayed"];
-const LABEL = { "on-route":"On route", loading:"Loading", clear:"Clear", delayed:"Delayed" };
+/* ── copy ─────────────────────────────────────────────────────────── */
+const T = {
+  es:{
+    send:"Enviar", placeholder:"Escribe tu pedido…",
+    menuIntro: s => "Esto es lo que tenemos hoy en " + s + ":",
+    added: n => n + (n === 1 ? " agregado a tu pedido." : " agregados a tu pedido."),
+    cartEmpty:"Todavía no tienes nada en el pedido. Escribe lo que quieras y te lo anoto.",
+    cartHead:"Tu pedido va así:",
+    confirmHint:"Si está bien, escribe *confirmar* y lo mando.",
+    subtotal:"Subtotal", feeLbl:"Envío", total:"Total",
+    placed:"¡Listo! Tu pedido está confirmado.",
+    driverLbl:"Repartidor asignado",
+    noDriver:"Ahorita todos los repartidores están ocupados — en cuanto se libere uno te aviso por aquí.",
+    statusNone:"No tienes ningún pedido en curso. Escríbeme lo que quieras y empezamos.",
+    statusHead:"Tu pedido va en camino:",
+    hours: (s,h) => s + " abre " + h + ". Fuera de ese horario déjame tu pedido y lo programo.",
+    fee: (c,f,z) => "El envío es de " + c + f + ". Cubrimos " + z + ".",
+    pay: p => "Aceptamos " + p + ".",
+    human: (ph,h) => "Te comunico con alguien: " + ph + ", en horario de " + h + ". O déjame aquí tu duda y la paso.",
+    thanks:"¡Gracias a ti! ¿Se te ofrece algo más?",
+    fallback:"No te entendí bien 🤔 Puedo mostrarte el menú, tomar tu pedido, decirte el costo de envío o el estado de tu pedido. ¿Qué necesitas?",
+    chips:["Ver el menú","Quiero 2 tacos al pastor","¿Cuánto es el envío?","Confirmar"],
+    updated:"pedido actualizado"
+  },
+  en:{
+    send:"Send", placeholder:"Type your order…",
+    menuIntro: s => "Here's what " + s + " has today:",
+    added: n => n + (n === 1 ? " added to your order." : " added to your order."),
+    cartEmpty:"Nothing in your order yet. Tell me what you'd like and I'll add it.",
+    cartHead:"Here's your order so far:",
+    confirmHint:"If that looks right, type *confirm* and I'll send it.",
+    subtotal:"Subtotal", feeLbl:"Delivery", total:"Total",
+    placed:"Done! Your order is confirmed.",
+    driverLbl:"Driver assigned",
+    noDriver:"Every driver is out right now — I'll message you here the moment one frees up.",
+    statusNone:"You don't have an order going. Tell me what you'd like and we'll start one.",
+    statusHead:"Your order is on its way:",
+    hours: (s,h) => s + " is open " + h + ". Outside that, leave your order and I'll schedule it.",
+    fee: (c,f,z) => "Delivery is " + c + f + ". We cover " + z + ".",
+    pay: p => "We take " + p + ".",
+    human: (ph,h) => "I'll put you through: " + ph + ", during " + h + ". Or leave your question here and I'll pass it on.",
+    thanks:"Thank you! Anything else?",
+    fallback:"I didn't quite catch that. I can show the menu, take your order, quote delivery, or check your order status. What do you need?",
+    chips:["Show me the menu","I want 2 tacos al pastor","How much is delivery?","Confirm"],
+    updated:"order updated"
+  }
+};
 
-const load = () => { try { return JSON.parse(localStorage.getItem(STORE)) || null; } catch(e){ return null; } };
-const save = () => { try { localStorage.setItem(STORE, JSON.stringify(cfg)); } catch(e){} };
+/* ── plumbing ─────────────────────────────────────────────────────── */
+const STORE = "pedidos-bot-v1";
+const DRV_STATUS = ["available","delivering","off"];
+const DRV_LABEL = {
+  es:{ available:"Disponible", delivering:"En ruta", off:"Fuera" },
+  en:{ available:"Available",  delivering:"Delivering", off:"Off" }
+};
 
-let cfg = load() || structuredClone(PITCH_CONFIG);
+const loadCfg = () => { try { return JSON.parse(localStorage.getItem(STORE)) || null; } catch(e){ return null; } };
+const saveCfg = () => { try { localStorage.setItem(STORE, JSON.stringify(cfg)); } catch(e){} };
+
+let cfg  = loadCfg() || structuredClone(PITCH_CONFIG);
+let cart = [];
+let order = null;
 
 const $ = id => document.getElementById(id);
+const t  = () => T[cfg.lang] || T.es;
 function el(tag, props, ...kids){
   const n = Object.assign(document.createElement(tag), props || {});
   for (const k of kids.flat()) if (k != null) n.append(k);
   return n;
 }
-const initials = s => (s.trim().split(/\s+/).slice(0,2).map(w => w[0] || "").join("") || "DD").toUpperCase();
+const norm = s => String(s).toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g,"").trim();
+const num  = v => { const n = parseFloat(String(v).replace(/[^\d.-]/g,"")); return isNaN(n) ? 0 : n; };
+const money = n => cfg.currency + n.toFixed(2).replace(/\.00$/,"");
+const initials = s => (String(s).trim().split(/\s+/).slice(0,2).map(w => w[0] || "").join("") || "??").toUpperCase();
+const escRe = s => s.replace(/[.*+?^${}()|[\]\\]/g,"\\$&");
+
+const WORDNUM = { uno:1, una:1, dos:2, tres:3, cuatro:4, cinco:5, seis:6, siete:7, ocho:8,
+                  one:1, two:2, three:3, four:4, five:5, six:6, seven:7, eight:8 };
+
+/* ── order maths ──────────────────────────────────────────────────── */
+const subtotal = () => cart.reduce((s,l) => s + num(l.price) * l.qty, 0);
+const feeNum   = () => num(cfg.fee);
+const total    = () => subtotal() + feeNum();
+
+/* find menu items mentioned in a message, with quantities */
+function parseItems(raw){
+  const q = norm(raw), hits = [];
+  for (const item of cfg.menu){
+    const full = norm(item.name);
+    if (!full) continue;
+    const tokens = full.split(/\s+/).filter(w => w.length >= 4);
+    const needles = [full, ...tokens].filter(n => q.includes(n));
+    if (!needles.length) continue;
+    const needle = needles.sort((a,b) => b.length - a.length)[0];
+    const m = q.match(new RegExp("(\\d+|" + Object.keys(WORDNUM).join("|") + ")\\s*(?:x|de\\s+)?\\s*" + escRe(needle)));
+    const qty = m ? (parseInt(m[1],10) || WORDNUM[m[1]] || 1) : 1;
+    hits.push({ item, qty: Math.max(1, Math.min(qty, 99)), at: q.indexOf(needle) });
+  }
+  return hits.sort((a,b) => a.at - b.at);
+}
+
+function addToCart(hits){
+  for (const h of hits){
+    const line = cart.find(l => l.name === h.item.name);
+    if (line) line.qty += h.qty;
+    else cart.push({ name:h.item.name, price:h.item.price, qty:h.qty });
+  }
+}
+
+function placeOrder(){
+  const free = cfg.drivers.find(d => d.status === "available");
+  const no = String(cfg.orderNo || "1000");
+  cfg.orderNo = String((parseInt(no,10) || 1000) + 1);
+  order = {
+    no, lines: cart.map(l => ({...l})),
+    sub: subtotal(), fee: feeNum(), tot: total(),
+    driver: free ? {...free} : null
+  };
+  if (free) free.status = "delivering";
+  cart = [];
+  buildDrivers(); syncFields(); saveCfg();
+  return order;
+}
+
+/* ── rendering blocks ─────────────────────────────────────────────── */
+function menuBlock(){
+  return el("div",{className:"mlist"}, cfg.menu.filter(m => m.name.trim()).map(m =>
+    el("div",{className:"mrow"},
+      el("span",{className:"nm"}, m.name, m.note ? el("span",{className:"nt", textContent:m.note}) : null),
+      el("span",{className:"pr", textContent:money(num(m.price))})
+    )));
+}
+
+function ticketBlock(o, statusKey){
+  const L = t();
+  const kids = [
+    el("div",{className:"tk-top"},
+      el("span",{className:"tk-num", textContent:"#" + o.no}),
+      el("span",{className:"pill s-" + statusKey,
+        textContent: statusKey === "preparing" ? (cfg.lang === "es" ? "Preparando" : "Preparing")
+                                               : (cfg.lang === "es" ? "En camino" : "On the way")})
+    ),
+    el("div",{className:"tk-lines"}, o.lines.map(l =>
+      el("div",{className:"tk-line"},
+        el("span",{className:"q", textContent:l.qty + "×"}),
+        el("span",{className:"n", textContent:l.name}),
+        el("span",{className:"p", textContent:money(num(l.price) * l.qty)})
+      ))),
+    el("div",{className:"tk-sum"},
+      el("div",{}, el("span",{textContent:L.subtotal}),  el("span",{textContent:money(o.sub)})),
+      el("div",{}, el("span",{textContent:L.feeLbl}),    el("span",{textContent:money(o.fee)})),
+      el("div",{className:"tot"}, el("span",{textContent:L.total}), el("span",{textContent:money(o.tot)}))
+    )
+  ];
+  if (o.driver){
+    kids.push(el("div",{className:"tk-drv"},
+      el("span",{className:"tk-k", textContent:L.driverLbl}),
+      el("span",{className:"unit", textContent:"#" + o.driver.unit}),
+      el("span",{className:"drv-name", textContent:o.driver.name})
+    ));
+  }
+  return el("div",{className:"ticket"}, kids);
+}
+
+function cartBlock(){
+  const L = t();
+  return el("div",{className:"ticket"},
+    el("div",{className:"tk-lines"}, cart.map(l =>
+      el("div",{className:"tk-line"},
+        el("span",{className:"q", textContent:l.qty + "×"}),
+        el("span",{className:"n", textContent:l.name}),
+        el("span",{className:"p", textContent:money(num(l.price) * l.qty)})
+      ))),
+    el("div",{className:"tk-sum"},
+      el("div",{}, el("span",{textContent:L.subtotal}), el("span",{textContent:money(subtotal())})),
+      el("div",{}, el("span",{textContent:L.feeLbl}),   el("span",{textContent:money(feeNum())})),
+      el("div",{className:"tot"}, el("span",{textContent:L.total}), el("span",{textContent:money(total())}))
+    ));
+}
 
 /* ── the bot ──────────────────────────────────────────────────────── */
-function findDriver(q){
-  const digits = q.match(/\d+/g) || [];
-  for (const d of digits){
-    const hit = cfg.fleet.find(f => String(parseInt(f.unit,10)) === String(parseInt(d,10)));
-    if (hit) return hit;
-  }
-  const words = q.split(/[^\p{L}]+/u).filter(w => w.length > 2);
-  return cfg.fleet.find(f =>
-    words.some(w => f.name.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g,"")
-      .includes(w.normalize("NFD").replace(/[\u0300-\u036f]/g,"")))
-  ) || null;
-}
-
-function driverCard(d){
-  return el("div",{className:"dcard"},
-    el("div",{className:"dc-top"},
-      el("span",{className:"unit", textContent:"UNIT " + d.unit}),
-      el("span",{className:"dc-name", textContent:d.name}),
-      el("span",{className:"pill s-" + d.status, textContent:LABEL[d.status] || d.status})
-    ),
-    el("div",{className:"dc-body"},
-      el("span",{}, el("span",{className:"dc-k",textContent:"Current stop"}), el("span",{className:"dc-v",textContent:d.stop || "—"})),
-      el("span",{}, el("span",{className:"dc-k",textContent:"ETA"}),          el("span",{className:"dc-v",textContent:d.eta  || "—"}))
-    )
-  );
-}
-
 function answer(raw){
-  const q = raw.toLowerCase().trim();
+  const q = norm(raw), L = t();
   const has = (...ws) => ws.some(w => q.includes(w));
 
-  // 1. a unit number or a driver's name always wins
-  const d = findDriver(q);
-  if (d) return { text: d.name + " is on unit " + d.unit + ".", cards:[d] };
+  // 1. confirm an order that has something in it
+  if (has("confirmar","confirmo","confirm","listo","ya esta","eso es todo","that's it","thats all","checkout","pagar")){
+    if (!cart.length) return { text:L.cartEmpty };
+    const o = placeOrder();
+    return { text:L.placed + (o.driver ? "" : "\n\n" + L.noDriver), block:ticketBlock(o,"preparing") };
+  }
 
-  // 2. answers you wrote in the panel
+  // 2. anything on the menu, by name — this is the ordering path
+  const hits = parseItems(q);
+  if (hits.length && !has("cuanto cuesta","how much is the","precio de")){
+    addToCart(hits);
+    const n = hits.reduce((s,h) => s + h.qty, 0);
+    return { text:L.added(n) + "\n" + L.cartHead + "\n" + L.confirmHint, block:cartBlock() };
+  }
+
+  // 3. answers you wrote in the panel
   for (const a of cfg.answers){
-    const trigs = a.trigger.split(",").map(t => t.trim().toLowerCase()).filter(Boolean);
-    if (trigs.length && trigs.some(t => q.includes(t)) && a.reply.trim()) return { text:a.reply };
+    const trigs = a.trigger.split(",").map(x => norm(x)).filter(Boolean);
+    if (trigs.length && trigs.some(x => q.includes(x)) && a.reply.trim()) return { text:a.reply };
   }
 
-  // 3. built-ins
-  if (has("board","everyone","all driver","all units","who is out","who's out","fleet","roster"))
-    return { text:"Here's the whole board right now.", cards: cfg.fleet };
+  // 4. built-ins
+  if (has("menu","carta","que tienen","que venden","what do you have","catalogo"))
+    return { text:L.menuIntro(cfg.shop), block:menuBlock() };
 
-  if (has("hour","open","close","closing","what time"))
-    return { text: cfg.company + " runs " + cfg.hours + ". Outside that, leave a message and dispatch picks it up at open." };
-
-  if (has("where","eta","how long","late","track","status of my","my delivery","my order")){
-    const out = cfg.fleet.filter(f => f.status === "on-route" || f.status === "delayed");
-    if (out.length) return { text:"Two ways to find it — give me the unit number, or here's what's moving right now.", cards: out };
-    return { text:"Nothing's on the road this minute. Give me your unit number and I'll pull the last scan." };
+  // tracking is checked before the cart, so "¿dónde va mi pedido?" reads as
+  // tracking rather than matching "mi pedido" and showing an empty cart
+  if (has("donde va","donde esta","status","estado","rastrear","track","ya viene","how long")){
+    if (order) return { text:L.statusHead, block:ticketBlock(order,"on-the-way") };
+    if (cart.length) return { text:L.cartHead + "\n" + L.confirmHint, block:cartBlock() };
+    return { text:L.statusNone };
   }
 
-  if (has("price","quote","cost","rate","how much"))
-    return { text:"Rates run on distance and weight. Tell me the pickup, the drop, and roughly what you're moving, and I'll get you a number before you hang up." };
+  if (has("mi pedido","mi orden","carrito","cart","my order","cuanto llevo","total"))
+    return cart.length ? { text:L.cartHead + "\n" + L.confirmHint, block:cartBlock() } : { text:L.cartEmpty };
 
-  if (has("book","schedule","pickup","pick up","need a truck","reserve"))
-    return { text:"I can start that. I need the pickup address, the drop, and the window you want it there — then I'll put it against whichever unit is clear." };
+  if (has("envio","domicilio","delivery","shipping","cuanto cobran por"))
+    return { text:L.fee(cfg.currency, num(cfg.fee).toFixed(0), cfg.zone) };
 
-  if (has("human","person","agent","representative","talk to someone","call"))
-    return { text:"Dispatch is at " + cfg.phone + " during " + cfg.hours + ". Say the word and I'll flag this thread for a callback." };
+  if (has("horario","abren","cierran","hora","hours","open","close"))
+    return { text:L.hours(cfg.shop, cfg.hours) };
 
-  if (has("area","cover","service","how far","radius"))
-    return { text:"We cover " + cfg.area + ". Past that we hand off to a partner carrier and stay on the paperwork." };
+  if (has("pago","pagar con","tarjeta","efectivo","transferencia","payment","pay with","cash","card"))
+    return { text:L.pay(cfg.payment) };
 
-  if (/^(hi|hey|hello|yo|good (morning|afternoon|evening))\b/.test(q))
-    return { text:"Hey — " + cfg.agent + " at " + cfg.company + ". Ask me about a unit, a driver, or a delivery." };
+  if (has("zona","cobertura","llegan a","area","cover"))
+    return { text:L.fee(cfg.currency, num(cfg.fee).toFixed(0), cfg.zone) };
 
-  if (has("thank","thanks","appreciate")) return { text:"Anytime. Anything else on the board?" };
+  if (has("humano","persona","hablar con","agente","llamar","human","someone","agent","call"))
+    return { text:L.human(cfg.phone, cfg.hours) };
 
-  return { text:"I didn't catch that one. I'm good on unit numbers, driver names, hours, rates, and where a load is — try one of those, or ask for the board." };
+  if (/^(hola|buenas|buenos dias|buenas tardes|hi|hey|hello|good (morning|afternoon|evening))\b/.test(q))
+    return { text:cfg.greeting[cfg.lang] || cfg.greeting.es };
+
+  if (has("gracias","thank")) return { text:L.thanks };
+
+  return { text:L.fallback };
 }
 
 /* ── transcript ───────────────────────────────────────────────────── */
 const log = $("log");
 const scroll = () => { log.scrollTop = log.scrollHeight; };
 
-function push(who, text, cards){
+function push(who, text, block){
   const b = el("div",{className:"msg " + who, textContent:text});
-  if (cards) for (const c of cards) b.append(driverCard(c));
+  if (block) b.append(block);
   log.append(b); scroll();
 }
-function sysline(text){
-  log.append(el("div",{className:"sysline", textContent:text})); scroll();
-}
-function botReply(raw){
-  const t = el("div",{className:"typing"}, el("i"), el("i"), el("i"));
-  log.append(t); scroll();
-  setTimeout(() => {
-    t.remove();
-    const a = answer(raw);
-    push("bot", a.text, a.cards);
-  }, 420 + Math.random()*260);
-}
+function sysline(text){ log.append(el("div",{className:"sysline", textContent:text})); scroll(); }
 
 function ask(text){
   push("me", text);
-  botReply(text);
+  const typing = el("div",{className:"typing"}, el("i"), el("i"), el("i"));
+  log.append(typing); scroll();
+  setTimeout(() => {
+    typing.remove();
+    const a = answer(text);
+    push("bot", a.text, a.block);
+  }, 430 + Math.random()*260);
 }
 
-/* ── chrome that reflects config ──────────────────────────────────── */
+/* ── chrome ───────────────────────────────────────────────────────── */
 function paintChrome(){
-  $("agentName").textContent = cfg.agent || "Assistant";
-  $("coName").textContent    = cfg.company || "";
-  $("mark").textContent      = initials(cfg.company || cfg.agent || "DD");
-
-  const first = cfg.fleet[0];
-  const suggestions = [
-    first ? "Who's on unit " + first.unit + "?" : "Show me the board",
-    "Show me the board",
-    "What time do you close?",
-    "Where's my delivery?"
-  ].filter((v,i,a) => a.indexOf(v) === i);
+  const L = t();
+  $("shopName").textContent = cfg.shop || "";
+  $("botName").textContent  = cfg.bot || "";
+  $("mark").textContent     = initials(cfg.shop || cfg.bot || "??");
+  $("entry").placeholder    = L.placeholder;
+  $("sendBtn").textContent  = L.send;
+  $("langEs").setAttribute("aria-pressed", String(cfg.lang === "es"));
+  $("langEn").setAttribute("aria-pressed", String(cfg.lang === "en"));
 
   const chips = $("chips");
   chips.textContent = "";
-  for (const s of suggestions){
-    chips.append(el("button",{className:"chip", type:"button", textContent:s,
-      onclick(){ ask(s); }}));
-  }
+  for (const s of L.chips) chips.append(el("button",{className:"chip", type:"button", textContent:s, onclick(){ ask(s); }}));
   $("jsonOut").textContent = JSON.stringify(cfg, null, 2);
 }
 
-/* ── the console ──────────────────────────────────────────────────── */
+/* ── console ──────────────────────────────────────────────────────── */
 let noteTimer, saveTimer;
 function touched(){
   paintChrome();
-  clearTimeout(saveTimer); saveTimer = setTimeout(save, 250);
+  clearTimeout(saveTimer); saveTimer = setTimeout(saveCfg, 250);
   clearTimeout(noteTimer);
-  noteTimer = setTimeout(() => {
-    if (log.children.length) sysline("setup updated");
-  }, 1100);
+  noteTimer = setTimeout(() => { if (log.children.length) sysline(t().updated); }, 1100);
 }
 
+function syncFields(){
+  for (const inp of document.querySelectorAll("[data-k]")) inp.value = cfg[inp.dataset.k] || "";
+  $("f-greeting").value = cfg.greeting[cfg.lang] || "";
+}
 for (const inp of document.querySelectorAll("[data-k]")){
-  inp.value = cfg[inp.dataset.k] || "";
   inp.addEventListener("input", () => { cfg[inp.dataset.k] = inp.value; touched(); });
 }
+$("f-greeting").addEventListener("input", e => { cfg.greeting[cfg.lang] = e.target.value; touched(); });
 
-function buildCrew(){
-  const host = $("crew"); host.textContent = "";
-  cfg.fleet.forEach((d, i) => {
-    const unit = el("input",{type:"text", className:"mono", value:d.unit, "aria-label":"Unit number"});
-    const name = el("input",{type:"text", value:d.name, "aria-label":"Driver name"});
-    const stop = el("input",{type:"text", value:d.stop, "aria-label":"Current stop"});
-    const sel  = el("select",{"aria-label":"Status"},
-      STATUSES.map(s => el("option",{value:s, textContent:LABEL[s], selected:s === d.status})));
-    const kill = el("button",{className:"kill", type:"button", textContent:"×", title:"Remove driver",
-      "aria-label":"Remove " + d.name, onclick(){ cfg.fleet.splice(i,1); buildCrew(); touched(); }});
+function buildMenu(){
+  const host = $("menu"); host.textContent = "";
+  cfg.menu.forEach((m,i) => {
+    const nm = el("input",{type:"text", value:m.name,  "aria-label":"Item name"});
+    const pr = el("input",{type:"text", value:m.price, className:"mono", "aria-label":"Price", inputMode:"decimal"});
+    const nt = el("input",{type:"text", value:m.note,  "aria-label":"Note", placeholder:"note (optional)"});
+    const kill = el("button",{className:"kill", type:"button", textContent:"×", "aria-label":"Remove item",
+      onclick(){ cfg.menu.splice(i,1); buildMenu(); touched(); }});
+    nm.oninput = () => { m.name = nm.value; touched(); };
+    pr.oninput = () => { m.price = pr.value; touched(); };
+    nt.oninput = () => { m.note = nt.value; touched(); };
+    host.append(el("div",{className:"row"}, el("div",{className:"r-main"}, nm, pr, kill), el("div",{className:"r-sub"}, nt)));
+  });
+}
 
-    unit.oninput = () => { d.unit = unit.value; touched(); };
-    name.oninput = () => { d.name = name.value; touched(); };
-    stop.oninput = () => { d.stop = stop.value; touched(); };
-    sel.onchange = () => { d.status = sel.value; touched(); };
-
-    host.append(el("div",{className:"crewrow"},
-      el("div",{className:"r1"}, unit, name, kill),
-      el("div",{className:"r2"}, sel, stop)
-    ));
+function buildDrivers(){
+  const host = $("drivers"); host.textContent = "";
+  cfg.drivers.forEach((d,i) => {
+    const un = el("input",{type:"text", value:d.unit, className:"mono", "aria-label":"Driver number"});
+    const nm = el("input",{type:"text", value:d.name, "aria-label":"Driver name"});
+    const st = el("select",{"aria-label":"Status"},
+      DRV_STATUS.map(s => el("option",{value:s, textContent:(DRV_LABEL[cfg.lang] || DRV_LABEL.es)[s], selected:s === d.status})));
+    const kill = el("button",{className:"kill", type:"button", textContent:"×", "aria-label":"Remove driver",
+      onclick(){ cfg.drivers.splice(i,1); buildDrivers(); touched(); }});
+    un.oninput = () => { d.unit = un.value; touched(); };
+    nm.oninput = () => { d.name = nm.value; touched(); };
+    st.onchange = () => { d.status = st.value; touched(); };
+    host.append(el("div",{className:"row"}, el("div",{className:"r-drv"}, un, nm, kill), el("div",{className:"r-sub"}, st)));
   });
 }
 
 function buildAnswers(){
   const host = $("answers"); host.textContent = "";
-  cfg.answers.forEach((a, i) => {
-    const trig = el("input",{type:"text", value:a.trigger, "aria-label":"Trigger words"});
-    const body = el("textarea",{value:a.reply, "aria-label":"Reply"});
-    const kill = el("button",{className:"kill", type:"button", textContent:"×", title:"Remove answer",
-      "aria-label":"Remove answer", onclick(){ cfg.answers.splice(i,1); buildAnswers(); touched(); }});
-    trig.oninput = () => { a.trigger = trig.value; touched(); };
-    body.oninput = () => { a.reply  = body.value;  touched(); };
-
-    host.append(el("div",{className:"crewrow"},
-      el("div",{className:"r1", style:"grid-template-columns:minmax(0,1fr) 34px"},
-        el("label",{}, el("span",{className:"lab",textContent:"If they say"}), trig), kill),
-      el("label",{}, el("span",{className:"lab",textContent:"Answer with"}), body)
-    ));
+  cfg.answers.forEach((a,i) => {
+    const tr = el("input",{type:"text", value:a.trigger, "aria-label":"Trigger words"});
+    const bd = el("textarea",{value:a.reply, "aria-label":"Reply"});
+    const kill = el("button",{className:"kill", type:"button", textContent:"×", "aria-label":"Remove answer",
+      onclick(){ cfg.answers.splice(i,1); buildAnswers(); touched(); }});
+    tr.oninput = () => { a.trigger = tr.value; touched(); };
+    bd.oninput = () => { a.reply  = bd.value;  touched(); };
+    host.append(el("div",{className:"row"},
+      el("div",{className:"r-main", style:"grid-template-columns:minmax(0,1fr) 34px"},
+        el("label",{}, el("span",{className:"lab", textContent:"If they say"}), tr), kill),
+      el("label",{}, el("span",{className:"lab", textContent:"Answer with"}), bd)));
   });
 }
 
+$("addItem").onclick   = () => { cfg.menu.push({ name:"", price:"0", note:"" }); buildMenu(); touched(); };
+$("addAnswer").onclick = () => { cfg.answers.push({ trigger:"", reply:"" }); buildAnswers(); touched(); };
 $("addDriver").onclick = () => {
-  const next = String(Math.max(0, ...cfg.fleet.map(f => parseInt(f.unit,10) || 0)) + 1).padStart(2,"0");
-  cfg.fleet.push({ unit:next, name:"New driver", status:"clear", stop:"—", eta:"Available now" });
-  buildCrew(); touched();
+  const next = String(Math.max(0, ...cfg.drivers.map(d => parseInt(d.unit,10) || 0)) + 1).padStart(2,"0");
+  cfg.drivers.push({ unit:next, name:"", status:"available" });
+  buildDrivers(); touched();
 };
-$("addAnswer").onclick = () => {
-  cfg.answers.push({ trigger:"", reply:"" });
-  buildAnswers(); touched();
-};
+
+function setLang(l){ cfg.lang = l; syncFields(); buildDrivers(); touched(); }
+$("langEs").onclick = () => setLang("es");
+$("langEn").onclick = () => setLang("en");
 
 function toast(msg){
-  const t = $("toast"); t.textContent = msg; t.classList.add("on");
-  setTimeout(() => t.classList.remove("on"), 1900);
+  const el2 = $("toast"); el2.textContent = msg; el2.classList.add("on");
+  setTimeout(() => el2.classList.remove("on"), 1900);
 }
-
 $("copyJson").onclick = async () => {
   try { await navigator.clipboard.writeText(JSON.stringify(cfg, null, 2)); toast("Setup copied to clipboard"); }
   catch(e){ toast("Couldn't reach the clipboard — the panel below has it"); }
 };
-
 $("reset").onclick = () => {
-  cfg = structuredClone(PITCH_CONFIG);
-  save();
-  for (const inp of document.querySelectorAll("[data-k]")) inp.value = cfg[inp.dataset.k] || "";
-  buildCrew(); buildAnswers(); paintChrome();
+  cfg = structuredClone(PITCH_CONFIG); cart = []; order = null;
+  saveCfg(); syncFields(); buildMenu(); buildDrivers(); buildAnswers(); paintChrome();
   log.textContent = "";
-  push("bot", cfg.greeting);
+  push("bot", cfg.greeting[cfg.lang]);
   toast("Back to the demo setup");
 };
-
 $("composer").addEventListener("submit", e => {
   e.preventDefault();
   const v = $("entry").value.trim();
@@ -565,6 +705,6 @@ $("composer").addEventListener("submit", e => {
 });
 
 /* ── go ───────────────────────────────────────────────────────────── */
-buildCrew(); buildAnswers(); paintChrome();
-push("bot", cfg.greeting);
+syncFields(); buildMenu(); buildDrivers(); buildAnswers(); paintChrome();
+push("bot", cfg.greeting[cfg.lang] || cfg.greeting.es);
 </script>
