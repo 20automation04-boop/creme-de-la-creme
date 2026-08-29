@@ -1,0 +1,49 @@
+{
+  "name": "the-help-glossary-commands-still-work-at-the-checkout-steps",
+  "from": "19990000056",
+  "turns": [
+    { "in": "1", "expectStep": "menu" },
+
+    {
+      "in": "back",
+      "expectStep": "menu",
+      "expectReplyNotContains": "didn't quite catch",
+      "comment": "The menu is the top of the tree so there is nowhere to go back to — but *back* is a documented command, and answering it with the generic confusion line made a correct command look broken AND counted as a parse failure, nudging the customer toward the agent ladder for using the bot properly."
+    },
+
+    { "in": "1", "expectStep": "item" },
+    { "listId": "item:1:1", "expectCartLength": 1 },
+    { "in": "done", "expectStep": "qtyrecap" },
+
+    {
+      "in": "done",
+      "expectStep": "notesrecap",
+      "expectReplyNotContains": "didn't catch",
+      "comment": "'done' typed at the quantity recap reads as 'I'm finished with quantities' — exactly what the toggle row does. 'notesrecap' had always accepted the word; this step hadn't, so the natural way to say it was a dead end."
+    },
+
+    { "in": "skip", "expectStep": "mode" },
+
+    {
+      "in": "cart",
+      "expectStep": "mode",
+      "expectReplyContains": ["Total: $7.00"],
+      "expectReplyNotContains": "which one",
+      "comment": "Was answered with 'Pickup or delivery — which one?'. No fee yet: session.mode is still null until they answer, so this total must stay item-only."
+    },
+
+    { "in": "delivery", "expectStep": "address" },
+    { "in": "12 Baymen Ave", "expectStep": "deliveryNote" },
+    { "in": "skip", "expectStep": "confirm" },
+
+    {
+      "in": "how much is it",
+      "expectStep": "confirm",
+      "expectReplyContains": ["Delivery - $5.00", "Total: $12.00"],
+      "expectReplyNotContains": "Yes to confirm",
+      "comment": "The single most likely question at the last screen before paying, and it used to come back as 'Yes to confirm, or no to cancel?'. Now answers with the delivery-inclusive total — the number they are about to agree to."
+    },
+
+    { "in": "yes", "expectReplyContains": "confirmed!" }
+  ]
+}

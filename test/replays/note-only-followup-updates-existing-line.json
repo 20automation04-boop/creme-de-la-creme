@@ -1,0 +1,17 @@
+{
+  "name": "note-only-followup-updates-existing-line-instead-of-duplicating",
+  "from": "19990000040",
+  "turns": [
+    { "in": "1", "expectStep": "menu" },
+    { "in": "10", "expectStep": "item" },
+    { "in": "2", "expectStep": "item", "expectCartLength": 1, "comment": "Veggie & Cheese" },
+    { "in": "3", "expectStep": "item", "expectCartLength": 2, "expectCartTotal": 22, "comment": "Chicken & Cheese" },
+    {
+      "comment": "these two lines were just tapped in with no note and no stated quantity — a same-turn note-only mention of the same items should annotate them, not silently double the cart",
+      "in": "No pepper on the chicken, extra pepper on the veggie",
+      "expectStep": "item",
+      "expectCartLength": 2,
+      "expectCartTotal": 22
+    }
+  ]
+}

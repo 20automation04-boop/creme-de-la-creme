@@ -1,0 +1,28 @@
+{
+  "name": "the-word-remove-inside-an-item-note-is-not-hijacked-into-a-cart-removal",
+  "from": "19990000053",
+  "turns": [
+    { "in": "1", "expectStep": "menu" },
+    { "in": "1", "expectStep": "item" },
+    { "comment": "Vanilla Bean", "in": "1", "expectStep": "item", "expectCartLength": 1 },
+    { "in": "done", "expectStep": "qtyrecap" },
+    { "listId": "qtyrow:0", "expectStep": "itemqty" },
+    { "listId": "lineqty:0:1", "expectStep": "notesrecap", "expectCartLength": 1 },
+    { "comment": "tap the row to add a special request for this line", "listId": "noterecap:0", "expectStep": "itemnote" },
+    {
+      "comment": "a customer is entirely allowed to ask the KITCHEN to remove an ingredient — this must be saved as the note verbatim, not intercepted as 'remove this cart line'",
+      "in": "remove onions please",
+      "expectStep": "notesrecap",
+      "expectCartLength": 1,
+      "expectReplyContains": "noted"
+    },
+    { "in": "done", "expectStep": "mode" },
+    {
+      "comment": "confirm the note text actually saved verbatim (not silently dropped by a false interception)",
+      "in": "cart",
+      "expectStep": "mode",
+      "expectCartLength": 1,
+      "expectReplyContains": "remove onions please"
+    }
+  ]
+}

@@ -1,0 +1,18 @@
+{
+  "name": "remove-with-no-matching-cart-line-falls-through-instead-of-asserting-not-found",
+  "from": "19990000052",
+  "turns": [
+    { "in": "1", "expectStep": "menu" },
+    { "in": "1", "expectStep": "item" },
+    { "comment": "Vanilla Bean", "in": "1", "expectStep": "item", "expectCartLength": 1 },
+    { "in": "done", "expectStep": "qtyrecap" },
+    { "listId": "qtyrow:0", "expectStep": "itemqty" },
+    { "listId": "lineqty:0:1", "expectStep": "notesrecap", "expectCartLength": 1 },
+    {
+      "comment": "the verb is there but nothing in the cart matches 'pizza' — must not falsely claim something was found, and must not touch the cart. Falls through to notesrecap's own free-text handling (deterministic, no AI call, unlike the 'item' step's fallback)",
+      "in": "remove the pizza",
+      "expectStep": "notesrecap",
+      "expectCartLength": 1
+    }
+  ]
+}

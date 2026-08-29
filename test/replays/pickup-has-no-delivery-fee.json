@@ -1,0 +1,25 @@
+{
+  "name": "a-pickup-order-is-never-charged-the-delivery-fee",
+  "from": "19990000055",
+  "turns": [
+    { "in": "1", "expectStep": "menu" },
+    { "in": "1", "expectStep": "item" },
+    { "listId": "item:1:1", "expectCartTotal": 7 },
+    { "in": "done", "expectStep": "qtyrecap" },
+    { "listId": "qty:each", "expectStep": "notesrecap" },
+    { "in": "skip", "expectStep": "mode" },
+
+    {
+      "in": "pickup",
+      "expectStep": "confirm",
+      "expectReplyContains": "Total: $7.00",
+      "expectReplyNotContains": "Delivery - $",
+      "comment": "The other side of the fee change: orderTotal keys off session.mode, so pickup must stay byte-identical to before it existed."
+    },
+
+    {
+      "in": "yes",
+      "expectSentToContains": ["__DRIVER__", "Total: $7.00 BZD"]
+    }
+  ]
+}

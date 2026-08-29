@@ -23,10 +23,15 @@
     },
     {
       "buttonId": "qty:each",
+      "expectStep": "notesrecap",
+      "expectCartLength": 1
+    },
+    {
+      "comment": "the manager's pin is shown even though it's the same (drink) side as the cart, which the automatic logic would never offer",
+      "listId": "noterecap:done",
       "expectStep": "mode",
       "expectCartLength": 1,
-      "expectReplyContains": "Salt Caramel Coffee* goes great with your *Vanilla Bean*",
-      "comment": "the manager's pin is shown even though it's the same (drink) side as the cart, which the automatic logic would never offer"
+      "expectReplyContains": "Salt Caramel Coffee* goes great with your *Vanilla Bean*"
     },
     {
       "comment": "accepting adds exactly the pinned item",

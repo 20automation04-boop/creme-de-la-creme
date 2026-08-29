@@ -246,8 +246,9 @@ test('a repeat order re-checks the item it ordered, not whatever now sits in tha
     { from, id: `repeat-stale-${++n}`, type: 'text', text: { body } }, res());
 
   // Order the item at display position 3 and confirm it.
-  // Tap the item, finish selecting, then answer the one quantity question.
-  for (const turn of ['1', cat.id, '3', 'done', '1', 'pickup', 'yes']) await send(turn);
+  // Tap the item, finish selecting, answer the one quantity question, skip
+  // the notes recap, then confirm.
+  for (const turn of ['1', cat.id, '3', 'done', '1', 'skip', 'pickup', 'yes']) await send(turn);
   const ordered = original[2];
   assert.equal(bot.lastOrders[from].cart[0].name, ordered.name);
   assert.equal(bot.lastOrders[from].cart[0].sheetId, ordered.sheetId,

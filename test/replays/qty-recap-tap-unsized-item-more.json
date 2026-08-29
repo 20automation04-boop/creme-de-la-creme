@@ -1,0 +1,41 @@
+{
+  "name": "qty-recap-wizard-auto-advances-to-the-next-item-instead-of-bouncing-back-to-the-list",
+  "from": "19990000044",
+  "turns": [
+    { "in": "1", "expectStep": "menu" },
+    { "in": "1", "expectStep": "item" },
+    { "comment": "Vanilla Bean — no sizes", "in": "1", "expectStep": "item", "expectCartLength": 1 },
+    { "comment": "Coffee — no sizes", "in": "2", "expectStep": "item", "expectCartLength": 2 },
+    { "in": "done", "expectStep": "qtyrecap" },
+    {
+      "comment": "unsized item — tapping its row skips straight to the quantity list, no size step",
+      "listId": "qtyrow:0",
+      "expectStep": "itemqty",
+      "expectReplyContains": "how many"
+    },
+    {
+      "comment": "quantity is a tappable LIST (1-9 directly, no typing needed). Setting it auto-advances straight into the SECOND cart line instead of returning to the full qty-recap list — a real customer wanting '3 of this, 2 of the next' found the old back-to-the-list round trip annoying",
+      "listId": "lineqty:0:7",
+      "expectStep": "itemqty",
+      "expectCartLength": 2,
+      "expectCartTotal": 56,
+      "expectReplyContains": "how many"
+    },
+    {
+      "comment": "second item's quantity — past the list's 1-9 range still falls back to typed text via the list's last row",
+      "listId": "lineqty:1:more",
+      "expectStep": "itemqty",
+      "expectReplyContains": "how many"
+    },
+    {
+      "comment": "both lines are now explicit, so this finishes checkout on its own — no separate qty:each/Done tap needed",
+      "in": "3",
+      "expectStep": "notesrecap",
+      "expectCartLength": 2,
+      "expectCartTotal": 70
+    },
+    { "in": "skip", "expectStep": "mode" },
+    { "in": "pickup", "expectStep": "confirm" },
+    { "in": "yes", "expectStep": "menu", "expectReplyContains": "confirmed!" }
+  ]
+}

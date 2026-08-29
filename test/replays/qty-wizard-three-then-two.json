@@ -1,0 +1,35 @@
+{
+  "name": "qty-wizard-3-of-one-then-2-of-the-next-across-a-three-item-cart",
+  "from": "19990000048",
+  "turns": [
+    { "comment": "the exact scenario a real customer described: give one item 3, the next 2, without re-picking from a full list each time", "in": "1", "expectStep": "menu" },
+    { "in": "1", "expectStep": "item" },
+    { "comment": "Vanilla Bean", "in": "1", "expectStep": "item", "expectCartLength": 1 },
+    { "comment": "Coffee", "in": "2", "expectStep": "item", "expectCartLength": 2 },
+    { "comment": "Chocolate", "in": "3", "expectStep": "item", "expectCartLength": 3 },
+    { "in": "done", "expectStep": "qtyrecap" },
+    { "listId": "qtyrow:0", "expectStep": "itemqty", "expectReplyContains": "how many" },
+    {
+      "comment": "3 of Vanilla Bean — auto-advances straight into Coffee's quantity list, no trip back through the full cart list",
+      "listId": "lineqty:0:3",
+      "expectStep": "itemqty",
+      "expectReplyContains": "how many"
+    },
+    {
+      "comment": "2 of Coffee — auto-advances into the third item, Chocolate",
+      "listId": "lineqty:1:2",
+      "expectStep": "itemqty",
+      "expectReplyContains": "how many"
+    },
+    {
+      "comment": "1 of Chocolate (default) — every line now explicit, so checkout starts on its own",
+      "listId": "lineqty:2:1",
+      "expectStep": "notesrecap",
+      "expectCartLength": 3,
+      "expectCartTotal": 42
+    },
+    { "in": "skip", "expectStep": "mode" },
+    { "in": "pickup", "expectStep": "confirm" },
+    { "in": "yes", "expectStep": "menu", "expectReplyContains": "confirmed!" }
+  ]
+}

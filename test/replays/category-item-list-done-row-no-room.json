@@ -1,0 +1,15 @@
+{
+  "name": "ten-item-category-has-no-room-for-a-done-row-but-still-hints-at-typing-done",
+  "from": "19990000047",
+  "turns": [
+    { "in": "1", "expectStep": "menu" },
+    {
+      "comment": "'Our Favs' (cat 2) has exactly 10 in-stock items — already at WhatsApp's 10-row list cap, so adding a Done row would either get rejected or silently bump a real menu item off the list. Items are never truncated to make room; the body falls back to a typed-done hint instead",
+      "in": "2",
+      "expectStep": "item",
+      "expectReplyContains": "ready to checkout"
+    },
+    { "comment": "Summer Blast — the 10th item — still reachable even with no row budget left for a Done row too", "in": "10", "expectStep": "item", "expectCartLength": 1 },
+    { "in": "done", "expectStep": "qtyrecap", "expectCartLength": 1 }
+  ]
+}

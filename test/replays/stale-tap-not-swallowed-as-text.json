@@ -25,9 +25,18 @@
     },
     {
       "in": "2",
-      "expectStep": "mode",
+      "expectStep": "notesrecap",
       "expectCartLength": 1,
       "expectReplyNotContains": "[pickup]"
+    },
+    {
+      "comment": "the notes recap needs the same stale-tap guard as qtyrecap above",
+      "buttonId": "pickup",
+      "expectStep": "notesrecap"
+    },
+    {
+      "in": "skip",
+      "expectStep": "mode"
     },
     {
       "buttonId": "delivery",

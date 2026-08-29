@@ -23,8 +23,14 @@
     {
       "comment": "size and quantity and a request, all in one reply",
       "in": "1 grande papaya sin azucar",
-      "expectStep": "mode",
-      "expectCartTotal": 8
+      "expectStep": "notesrecap",
+      "expectCartTotal": 8,
+      "expectReplyContains": "sin azucar"
+    },
+    {
+      "comment": "the note from the qty recap already shows in the notes recap — just continue",
+      "in": "listo",
+      "expectStep": "mode"
     },
     {
       "in": "entrega",

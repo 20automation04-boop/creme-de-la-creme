@@ -15,6 +15,8 @@
 process.env.BOT_DRY_RUN = '1';
 process.env.CHAKRA_WEBHOOK_SECRET = 'test-secret';
 process.env.KITCHEN_PASSWORD = 'correct-horse-battery-staple';
+process.env.MANAGER_PASSWORD = 'manager-correct-horse-battery';
+process.env.DRIVER_PASSWORD = 'driver-correct-horse-battery';
 delete process.env.WEBHOOK_VERIFY_TOKEN; // the fail-open case, on purpose
 
 const test = require('node:test');
@@ -96,6 +98,55 @@ test('kitchen login locks out after repeated wrong passwords', async () => {
   const attempt = () => post('/kitchen/login', JSON.stringify({ password: 'wrong' }));
   const codes = [];
   for (let i = 0; i < 14; i++) codes.push((await attempt()).status);
+  assert.ok(codes.includes(429), `expected a 429 lockout, got: ${codes.join(',')}`);
+  assert.equal(codes[0], 401, 'the first wrong guess should be a plain 401, not a lockout');
+});
+
+// The manager and driver boards were added after /kitchen and did not inherit
+// its login hardening: both accepted unlimited password guesses, and neither
+// cookie carried Secure. /manager guards strictly MORE than /kitchen does —
+// sales, the customer list, live conversations, prices, pause-orders and the
+// promo broadcast — so it was the least-defended door to the most valuable
+// room. These pin all three boards to the same bar.
+//
+// Ordering below is load-bearing, same as the kitchen pair above: every
+// "correct password" test has to run before anything hammers that board,
+// because a correct password inside an active lockout legitimately returns
+// 429 and would let the test pass while asserting nothing.
+for (const board of ['manager', 'driver']) {
+  test(`the correct ${board} password is accepted and its cookie is Secure`, async () => {
+    const res = await post(`/${board}/login`, JSON.stringify({ password: `${board}-correct-horse-battery` }));
+    assert.equal(res.status, 200);
+    const cookie = res.headers.get('set-cookie') || '';
+    assert.match(cookie, /HttpOnly/i);
+    assert.match(cookie, /Secure/i, `the ${board} cookie is a year-long bearer token and must never cross plain HTTP`);
+    assert.match(cookie, /SameSite=Lax/i);
+  });
+}
+
+// Doubles as the driver board's own lockout test. The two assertions have to
+// share one test because they share one precondition: the manager board can
+// only be shown to survive the driver's lockout while it is still unlocked,
+// which stops being true the moment the manager lockout test below runs.
+test('driver login locks out, and that lockout does not reach the manager board', async () => {
+  const codes = [];
+  for (let i = 0; i < 14; i++) {
+    codes.push((await post('/driver/login', JSON.stringify({ password: 'wrong' }))).status);
+  }
+  assert.ok(codes.includes(429), `expected a 429 lockout, got: ${codes.join(',')}`);
+  assert.equal(codes[0], 401, 'the first wrong guess should be a plain 401, not a lockout');
+
+  // Separate limiter keys per board — a brute-force run against one must not
+  // lock staff out of another mid-shift.
+  const manager = await post('/manager/login', JSON.stringify({ password: 'manager-correct-horse-battery' }));
+  assert.notEqual(manager.status, 429, 'the driver lockout leaked into the manager board');
+});
+
+test('manager login locks out after repeated wrong passwords', async () => {
+  const codes = [];
+  for (let i = 0; i < 14; i++) {
+    codes.push((await post('/manager/login', JSON.stringify({ password: 'wrong' }))).status);
+  }
   assert.ok(codes.includes(429), `expected a 429 lockout, got: ${codes.join(',')}`);
   assert.equal(codes[0], 401, 'the first wrong guess should be a plain 401, not a lockout');
 });

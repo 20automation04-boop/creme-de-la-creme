@@ -10,6 +10,7 @@
     { "in": "4", "expectStep": "item", "expectCartLength": 4 },
     { "in": "5", "expectStep": "item", "expectCartLength": 5 },
     { "comment": "the recap reads back all five", "in": "done", "expectStep": "qtyrecap", "expectReplyContains": "Blueberry" },
-    { "comment": "the skip button — the common case where it is one of each", "buttonId": "qty:each", "expectStep": "mode", "expectCartLength": 5, "expectCartTotal": 30 }
+    { "comment": "the skip button — the common case where it is one of each", "buttonId": "qty:each", "expectStep": "notesrecap", "expectCartLength": 5, "expectCartTotal": 30 },
+    { "comment": "the notes recap lists all five too, then Done moves on", "listId": "noterecap:done", "expectStep": "mode", "expectCartLength": 5, "expectCartTotal": 30 }
   ]
 }

@@ -22,10 +22,15 @@
     },
     {
       "buttonId": "qty:each",
+      "expectStep": "notesrecap",
+      "expectCartLength": 1
+    },
+    {
+      "comment": "the offer must actually APPEAR here (asserting only that add1:/no_thanks work would pass even if it were never shown) and, since the cart is drinks-only, must be a food pairing (category 8), never another drink",
+      "listId": "noterecap:done",
       "expectStep": "mode",
       "expectCartLength": 1,
-      "expectReplyContains": "goes great with your *",
-      "comment": "the offer must actually APPEAR here (asserting only that add1:/no_thanks work would pass even if it were never shown) and, since the cart is drinks-only, must be a food pairing (category 8), never another drink"
+      "expectReplyContains": "goes great with your *"
     },
     {
       "comment": "declining leaves the cart alone and keeps them at mode",

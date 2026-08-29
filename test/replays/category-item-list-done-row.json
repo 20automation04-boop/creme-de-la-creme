@@ -1,0 +1,15 @@
+{
+  "name": "category-item-list-has-a-tappable-done-row-not-just-typed-done",
+  "from": "19990000046",
+  "turns": [
+    { "in": "1", "expectStep": "menu" },
+    { "in": "1", "expectStep": "item" },
+    { "comment": "Vanilla Bean", "in": "1", "expectStep": "item", "expectCartLength": 1 },
+    {
+      "comment": "cat 1 has 9 items, under the 10-row cap, so the Done row fits alongside all of them",
+      "listId": "done",
+      "expectStep": "qtyrecap",
+      "expectCartLength": 1
+    }
+  ]
+}

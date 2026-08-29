@@ -52,8 +52,9 @@ current value in both `DRIVER_NUMBERS` and `OWNER_NUMBERS`).
 2. Copy `.env.example` to `.env` and fill in real values (transferred
    separately/securely — never via git; see "Secrets" below).
 3. `node index.js` runs it locally. `npm test` runs the replay suite
-   (`node --test test/*.test.js`) — 52 tests covering the ordering FSM,
-   button routing, owner commands, and the escalation ladder. They use
+   (`node --test test/*.test.js`) — 102 tests covering the ordering FSM,
+   button routing, owner commands, the escalation ladder, and the dashboards.
+   They use
    `BOT_DRY_RUN=1` (set by the test files themselves) so no real WhatsApp
    send or Sheets write happens, even with real credentials in `.env`.
    Run them before every deploy — `npm run predeploy` is the same thing.
@@ -167,8 +168,77 @@ command aliases, and a one-time checkout upsell.
    silent. A free UptimeRobot pinging `/` would close it.
 3. **Sessions are in memory.** A deploy or crash drops in-flight carts
    (saved carts survive to the sheet; a cart mid-order does not).
-4. **Cash only, no POS integration** — fine at current scale, worth
-   revisiting with volume.
+4. **Cash only in production today.** A generic online-payments SCAFFOLD
+   exists (`PAYMENTS_ENABLED`, the 'payment' step, `/payment-webhook`) but no
+   real provider is wired in — see "Online payments" below before turning it
+   on.
+
+## Online payments (scaffold, not live — added 2026-08-28)
+
+The owner asked whether online payment could remove the manual "did they
+actually deposit it" check. Researched Belize-specific options (Belize
+Bank's card payment gateway, Atlantic Bank's gateway, E-kyash, DigiWallet) —
+every real path requires an in-person branch visit, a signed merchant
+agreement, and a bank's KYC/approval process. That's a real-world business
+step nobody but the owner can do, and Belize Bank's technical integration
+guide had already been taken down from their live site by the time this was
+researched (a PDF found via search 404'd; only a stale web.archive.org copy
+exists, and it wasn't fetchable either) — so nothing here is wired to any
+specific provider's real API.
+
+What IS built: the generic plumbing so that once there's a real merchant
+account and real API docs, wiring one in is a small, isolated change instead
+of a checkout redesign.
+
+- **`PAYMENTS_ENABLED`** (env var) — OFF by default. With it off (today's
+  state), `'confirm'`'s "yes" behaves exactly as it always has: immediate
+  cash-style confirm, no payment step. This is a runtime flag
+  (`let paymentsEnabled`, not a frozen `const`), not just an env read, so
+  `test/payments.test.js` can flip it per-test via
+  `setPaymentsEnabledForTests()`.
+- **`createPaymentLink(orderNumber, session)`** and **`verifyPaymentWebhook(req)`**
+  (both in index.js, right above `tryCheckoutWithUpsell`) — the ONLY two
+  functions a real integration needs to fill in. `createPaymentLink` today
+  always throws; `verifyPaymentWebhook` always returns `null`. A thrown/falsy
+  result from `createPaymentLink` is treated as "payments aren't usable yet"
+  and checkout silently falls back to the normal unpaid confirm (plus an
+  `alertOwner` ping) — same "must never block a real order" principle the
+  checkout upsell already follows. Test-only overrides:
+  `setPaymentAdapterForTests()` / `setPaymentWebhookVerifierForTests()`.
+- **`finalizeOrder(session, from, lang, presetOrderNumber)`** — a pure
+  extraction of what used to be inline in the 'confirm' case's "yes" branch
+  (mint order number, write `lastOrders`, log to Sheets, notify
+  driver/owner). Shared by BOTH the cash path and the payment-webhook path,
+  so a paid order goes through the exact same staff-facing code the kitchen/
+  manager dashboards already depend on — not a parallel path that could
+  quietly drift from it.
+- **`'payment'` step + `pendingPayments`** — when `createPaymentLink`
+  succeeds, the cart is snapshotted into `pendingPayments[reference]`
+  (keyed by whatever `createPaymentLink` returned), the customer gets the
+  link, and the order is deliberately NOT written to `lastOrders`/Sheets yet.
+  `POST /payment-webhook` is what actually finalizes it, once
+  `verifyPaymentWebhook` confirms payment. The cart is locked at this
+  step — unlike `'confirm'`, it does not accept "add one more thing" free
+  text, since that would desync the cart from the amount already sent to
+  the payment page.
+- Typing `cancel` at the `'payment'` step is caught by the pre-existing
+  GLOBAL cancel command (same one every other step uses) — it now also
+  deletes the matching `pendingPayments` entry so a cancelled payment
+  doesn't leak forever; see that handler's comment.
+
+**Known gap, left unsolved on purpose:** nothing expires a `pendingPayments`
+entry if the customer just abandons the chat without paying OR typing
+`cancel` — not worth guessing a cleanup policy before there's a real gateway
+to see actual webhook timing/retry behavior against.
+
+**To actually go live:** get a merchant account (Belize Bank / Atlantic Bank
+/ E-kyash / other), replace `createPaymentLink`/`verifyPaymentWebhook`'s
+bodies with that provider's real API calls and signature scheme (mirror
+`verifyChakraSignature`'s HMAC pattern near the top of index.js for the
+signature check), set `PAYMENTS_ENABLED=true`, and register the provider's
+webhook URL as `https://<your-domain>/payment-webhook`. Covered by
+`test/payments.test.js` (4 tests, all using the test-only overrides above —
+none of it touches a real provider).
 
 ## In-flight work at handoff time
 
@@ -215,11 +285,21 @@ holds the line, and what to re-check if you change any of it:
 - **`WEBHOOK_VERIFY_TOKEN` must be set**, or `GET /whatsapp` refuses every
   verification handshake. It previously handed the challenge to any caller
   when the variable was missing.
-- **`KITCHEN_PASSWORD` must be long and random.** It is the only thing guarding
-  customer phone numbers and addresses on `/kitchen`. Wrong guesses are capped
-  at 10 per 15 minutes globally (failures only, so staff logins never count).
-  The cookie is a bearer token valid for a year, so rotating the password is
-  what revokes a lost or stolen device.
+- **All three dashboard passwords must be long and random.** Each is the only
+  thing guarding its board: `/kitchen` and `/driver` expose customer phone
+  numbers and addresses, and `/manager` adds sales, the full customer list,
+  live conversations, price edits, pause-orders and the promo broadcast.
+  Wrong guesses are capped at 10 per 15 minutes globally on each board
+  (failures only, so staff logins never count), on SEPARATE limiter keys so a
+  brute-force run at one board cannot lock staff out of another mid-shift.
+  Every cookie is a bearer token valid for a year and carries `Secure` +
+  `HttpOnly` + `SameSite=Lax`, so rotating the password is what revokes a lost
+  or stolen device.
+  Note for anyone adding a FOURTH board: `/manager` and `/driver` were added
+  after `/kitchen` and silently inherited none of this — no rate limit, no
+  `Secure` — for a while, because each login handler is written out
+  longhand rather than sharing a helper. Copy the whole shape, and add the
+  pair of tests in `test/security.test.js` that pins it.
 - **Customer-typed values go through `sheetSafe()` before any Sheets write.**
   Sheets evaluates a cell starting with `=`, `+`, `-` or `@` as a formula, so an
   unescaped saved address can execute when staff open the tab. Any NEW code that

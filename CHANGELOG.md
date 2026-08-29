@@ -7,6 +7,158 @@ Full detail is in the commit messages (`git log`); this is the map.
 
 ---
 
+## 2026-08-29 — bug hunt: quantity loss, Spanish skip words, dashboard logins
+
+Found by driving realistic customer conversations through the real FSM in
+both languages, plus a review of the pending diff. Every fix below ships
+with regression tests that were confirmed to FAIL against the old code first
+— a pinning test that passes either way is worth nothing.
+
+### Customer-facing bugs
+
+**Repeated taps silently lost their quantity.** Tapping an item three times
+correctly built a line of three (`cart` even showed "x3 - $21.00"), but the
+quantity recap rendered every line at its *unit* price, so the screen said
+"Vanilla Bean — $7.00" and gave no sign the line held three. Tapping the
+finalize row — labelled "1 of each", which reads as plain confirmation —
+then reset it to one. Two drinks gone, no message saying so.
+
+Two causes, both fixed. The recap body now shows `x3 — $21.00` whenever a
+line holds more than one. And the finalize handler no longer writes
+`line.qty = 1`: an implicit line is *always* at least 1, so that assignment
+could only ever REDUCE a quantity — it was never doing useful work. It now
+just marks lines settled. The row also reads "Done" rather than "1 of each"
+once any line holds more than one, since that label would otherwise be a lie.
+
+**Spanish `saltar` was not a skip word.** The lists had `omitir` but not
+`saltar`, the more common everyday word. At the notes recap it was rejected
+as unclear; at the delivery-landmark step it was worse — not rejected but
+*stored*, so the driver was handed the word "saltar" as the find-me
+instruction. Same family as the stale "Done" tap that once became a
+delivery address.
+
+**Asking to see your cart failed at both recap steps.** `cart`/`carrito`/
+`total` were only wired at the menu and item steps, though the command
+glossary advertises them as working anywhere. At a recap they fell into the
+quantity/note parser and came back as a parse failure — which also feeds the
+frustration ladder, so asking to see your own order twice was enough to get
+offered a human agent. Now resolved (prose forms included) but ONLY after
+the step's own parse returns zero matches, so it cannot swallow a real
+quantity phrase or note: anything reaching it was already a failure.
+
+### Security
+
+**The manager and driver boards never inherited /kitchen's login
+hardening.** Both accepted unlimited password guesses — no rate limit at all
+— and neither cookie carried `Secure`, despite being year-long bearer
+tokens. `/manager` guards strictly more than `/kitchen` does (sales, the
+customer list, live conversations, prices, pause-orders, the promo
+broadcast), so the least-defended door opened the most valuable room. All
+three boards now share the same 10-per-15-minute ceiling, on separate keys
+so a run at one cannot lock staff out of another, and all three cookies are
+`Secure`.
+
+**`.gitignore` had lost `.claude/settings.local.json`** to a typo
+(`setngs`). It still looked ignored locally only because a *global* gitignore
+covered it — machine-local, so any other clone would have seen the file
+untracked and ready to be committed by `git add -A`.
+
+**The manager menu editor wrote item names to the sheet without
+`sheetSafe`.** Staff-typed, so low risk, but an item renamed to `=1+1` would
+be evaluated by Sheets and read back by `refreshMenuFromSheet` as the name
+"2" — shown to customers.
+
+### Money
+
+**The $5 delivery fee was never actually charged.** `cartTotal` summed items
+only, and so did the customer's total, the Manager sheet row, and the
+driver's notification — which said "Total to collect: $7.00" on an order the
+customer had twice been told carried a $5 delivery fee. Every delivery lost
+the fee and recorded revenue was short by the same amount.
+
+Now charged, on the owner's call. `orderTotal(cart, mode)` adds the fee for
+delivery and nothing otherwise; it feeds the customer's total, the sheet, and
+both staff notifications from one place. It takes the *mode* rather than a
+session so the cart helpers stay pure and every pre-mode screen (menu, item,
+both recaps) renders exactly as before — `session.mode` is null until the
+customer picks one. The fee gets its own visible line rather than being
+folded into the total: someone who watched their items reach $14 and then
+sees $19 needs to see why.
+
+**The advertised $5 delivery minimum was removed rather than enforced.** It
+appeared in four FAQ strings and the Gemini shop facts, and nothing anywhere
+checked it — a $2.50 hot dog went out for delivery just fine. The owner
+chose to drop the claim. `SHOP_INFO.minDeliveryOrder` is kept but marked
+unused, with a note that putting the promise back means also gating the
+`'mode'` step on it, or the copy drifts from the behaviour again.
+
+### The claims audit
+
+Every bug above turned out to be the same shape: a promise made in the copy
+and kept somewhere else, or nowhere. So the last pass stopped hunting bugs
+and instead took every customer-facing claim in `SHOP_INFO` and the `TXT`
+blocks and asked what enforces it. A generated command × step matrix
+(12 documented commands against all 8 steps of the ordering funnel, both
+languages) found four more:
+
+- **`cart` died at `mode` and `confirm`** — answered with "Pickup or
+  delivery — which one?" and "Yes to confirm, or no to cancel?". Those are
+  the two screens where someone is most likely to ask what they are about to
+  pay, and with the delivery fee now real, `confirm` is where the number
+  actually changes. Both resolved before `attemptFreeOrder` so the question
+  no longer burns a Gemini call being misread as an item.
+- **`done` died at `qtyrecap`** — `notesrecap` had always accepted the word.
+- **`back` died at `menu`.** Nowhere to go from the top of the tree, but
+  answering a documented command with the generic confusion line also
+  counted as a *parse failure*, nudging the customer toward the agent ladder
+  for using the bot correctly. Now re-shows the menu.
+- **"You can add more items any time, even mid-order"** was false at both
+  recap steps. Fixed in the COPY, not the code: those steps treat all free
+  text as their own answer, and item-parsing there is exactly the
+  content-swallowing hazard the `note <text>` command is already excluded
+  from. The claim now says "while browsing, or right up to the final
+  confirm", which is what actually happens.
+
+Also found and fixed: **the payment FAQ was a frozen "Cash only for now"
+string with no link to `PAYMENTS_ENABLED`**, so flipping that flag would have
+left the bot telling customers cash-only while checkout handed them a payment
+link — the delivery-fee bug waiting to happen a second time. Now derived from
+the flag, with both states pinned in `test/payments.test.js`.
+
+**Checked and found honest:** the 3-minute cancel window, the "20 more
+minutes" idle hold (10-minute nudge + 30-minute expiry), the `MAX_QTY` and
+`MAX_CART_LINES` ceilings, the `3x12` bulk shortcut, `stop deals`, and the
+voice-note / photo / shared-location claims (all three have real handlers).
+
+**Accepted as-is, deliberately:**
+
+- **`deliveryAreas` is display-only** — nothing validates that an address is
+  inside Belize City limits, so an out-of-area order is accepted and
+  dispatched. Left alone on purpose: real validation needs geocoding, and a
+  naive keyword check would falsely reject the landmark-style addresses that
+  are normal here. A false rejection costs a real order, which is worse than
+  the shop ringing back.
+- **`repeat` refuses mid-order** (at both recaps, `mode` and `confirm`).
+  Correct — it replaces the cart, which would be destructive there — but it
+  says "I didn't catch that" rather than explaining. Behaviour right,
+  message wrong.
+- **`hoursEn`/`hoursEs` duplicate `SHOP_HOURS`.** Already carries an
+  IMPORTANT "keep in sync" comment; the display string and the actual
+  open/closed logic are still two sources of truth for one fact.
+
+### Test harness
+
+Two additions, both driven by the bugs above. `expectReplyContains` now takes
+an array as well as a string (ALL-of), because one reply often has to satisfy
+several claims at once and splitting them across turns silently sends extra
+messages instead of asserting twice about the same one. And
+`expectSentToContains` can assert the CONTENT of a message sent to the driver
+or owner — previously only the customer's own replies were inspectable, which
+is exactly why a wrong "total to collect" on every delivery order was
+invisible to the suite.
+
+---
+
 ## 2026-08-28 — dashboards, WhatsApp-native input, UX polish
 
 ### New features

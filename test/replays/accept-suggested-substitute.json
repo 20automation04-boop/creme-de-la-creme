@@ -1,0 +1,22 @@
+{
+  "name": "yeah-sure-accepts-the-just-suggested-substitute",
+  "from": "19990000041",
+  "turns": [
+    { "in": "1", "expectStep": "menu" },
+    { "markSoldOut": ["3.1"], "in": "3", "expectStep": "item" },
+    {
+      "comment": "Mango/Pine (3.1) is sold out — tapping it should offer a substitute and remember it",
+      "in": "1",
+      "expectStep": "item",
+      "expectCartLength": 0,
+      "expectReplyContains": "sold out"
+    },
+    {
+      "comment": "a bare affirmative should now add whatever substitute was just suggested, not fall through to itemNotFound",
+      "in": "yeah sure",
+      "expectStep": "item",
+      "expectCartLength": 1,
+      "expectReplyNotContains": "don't see that number"
+    }
+  ]
+}

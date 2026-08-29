@@ -1,0 +1,26 @@
+{
+  "name": "repeated-taps-keep-their-quantity-through-the-qty-recap",
+  "from": "19990000049",
+  "turns": [
+    { "in": "1", "expectStep": "menu" },
+    { "in": "1", "expectStep": "item" },
+    { "listId": "item:1:1", "expectCartLength": 1, "expectCartTotal": 7 },
+    { "listId": "item:1:1", "expectCartTotal": 14 },
+    { "listId": "item:1:1", "expectCartTotal": 21 },
+
+    {
+      "in": "done",
+      "expectStep": "qtyrecap",
+      "expectCartTotal": 21,
+      "expectReplyContains": "Vanilla Bean x3",
+      "comment": "The recap BODY must show the running amount. Rendering only the unit price made three taps look identical to one, so the customer could not see what the row below was about to settle."
+    },
+
+    {
+      "listId": "qty:each",
+      "expectStep": "notesrecap",
+      "expectCartTotal": 21,
+      "comment": "Tapping the finalize row must NOT reset the line to 1. An implicit line is always at least 1, so the old unconditional reset could only ever REDUCE one — three taps silently became one drink on the way to checkout."
+    }
+  ]
+}

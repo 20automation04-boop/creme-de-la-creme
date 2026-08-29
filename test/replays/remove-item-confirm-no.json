@@ -1,0 +1,11 @@
+{
+  "name": "remove-item-declined-leaves-the-cart-untouched",
+  "from": "19990000050",
+  "turns": [
+    { "in": "1", "expectStep": "menu" },
+    { "in": "1", "expectStep": "item" },
+    { "comment": "Vanilla Bean", "in": "1", "expectStep": "item", "expectCartLength": 1, "expectCartTotal": 7 },
+    { "in": "remove the vanilla bean", "expectStep": "item", "expectCartLength": 1, "expectReplyContains": "Vanilla Bean" },
+    { "in": "no", "expectStep": "item", "expectCartLength": 1, "expectCartTotal": 7 }
+  ]
+}

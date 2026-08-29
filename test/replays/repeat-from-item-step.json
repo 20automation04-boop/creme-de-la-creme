@@ -21,6 +21,10 @@
     },
     {
       "in": "2",
+      "expectStep": "notesrecap"
+    },
+    {
+      "in": "skip",
       "expectStep": "mode"
     },
     {

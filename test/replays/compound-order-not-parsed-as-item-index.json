@@ -1,0 +1,17 @@
+{
+  "name": "compound-order-with-leading-digit-not-parsed-as-item-index",
+  "from": "19990000039",
+  "turns": [
+    { "in": "1", "expectStep": "menu" },
+    { "markSoldOut": ["2.1"], "in": "2", "expectStep": "item" },
+    { "in": "5", "expectStep": "item", "expectCartLength": 1, "comment": "Oreo Cheesecake" },
+    { "in": "7", "expectStep": "item", "expectCartLength": 2, "comment": "Brownie Blizzard" },
+    {
+      "comment": "a leading digit must not make parseInt read this as 'pick item #1' (Salt Caramel Coffee, sold out, sitting in that slot) — it needs to reach the free-order parser instead",
+      "in": "1 Oreo Cheesecake and 3 Brownie Blizzard",
+      "expectStep": "item",
+      "expectReplyNotContains": "is sold out right now",
+      "expectCartLength": 2
+    }
+  ]
+}

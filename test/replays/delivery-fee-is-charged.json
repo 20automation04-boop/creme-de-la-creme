@@ -1,0 +1,62 @@
+{
+  "name": "the-delivery-fee-reaches-the-customer-total-and-the-driver",
+  "from": "19990000053",
+  "turns": [
+    {
+      "in": "1",
+      "expectStep": "menu"
+    },
+    {
+      "in": "1",
+      "expectStep": "item"
+    },
+    {
+      "listId": "item:1:1"
+    },
+    {
+      "listId": "item:1:1",
+      "expectCartTotal": 14
+    },
+    {
+      "in": "done",
+      "expectStep": "qtyrecap"
+    },
+    {
+      "listId": "qty:each",
+      "expectStep": "notesrecap"
+    },
+    {
+      "in": "skip",
+      "expectStep": "mode",
+      "expectReplyContains": "Total: $14.00",
+      "expectReplyNotContains": "Delivery - $",
+      "comment": "Before a mode is picked there is no fee to show. Every pre-mode screen must render exactly as it did before the fee existed."
+    },
+    {
+      "in": "delivery",
+      "expectStep": "address"
+    },
+    {
+      "in": "12 Baymen Ave",
+      "expectStep": "deliveryNote"
+    },
+    {
+      "in": "skip",
+      "expectStep": "confirm",
+      "expectReplyContains": [
+        "Delivery - $5.00",
+        "Total: $19.00"
+      ],
+      "comment": "Its own line AND the total it produces. $14 of drinks + the $5 fee the bot had already quoted twice — this total read $14.00 before, so the shop ate the fee on every single delivery order."
+    },
+    {
+      "in": "yes",
+      "expectSentTo": "__DRIVER__",
+      "expectSentToContains": [
+        "__DRIVER__",
+        "Total to collect: $19.00 BZD"
+      ],
+      "comment": "The costliest symptom: the driver was being told to collect $14.00 on an order the customer had twice been told carried a $5 delivery fee."
+    }
+  ]
+}

@@ -5,7 +5,8 @@
     { "in": "1", "expectStep": "menu" },
     { "in": "1", "expectStep": "item" },
     { "comment": "the 2x3 shorthand states a quantity outright, so the batch pass must skip this line", "in": "2x3", "expectStep": "menu", "expectCartLength": 1, "expectCartTotal": 21 },
-    { "comment": "straight to pickup/delivery — nothing left to ask", "in": "done", "expectStep": "mode" },
+    { "comment": "quantity was stated, so straight to the notes recap — nothing left to ask about amounts", "in": "done", "expectStep": "notesrecap" },
+    { "in": "skip", "expectStep": "mode" },
     { "in": "pickup", "expectStep": "confirm" }
   ]
 }

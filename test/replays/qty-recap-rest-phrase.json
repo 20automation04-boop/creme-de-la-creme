@@ -11,10 +11,11 @@
     {
       "comment": "one item named explicitly, everything else covered by 'the rest' instead of defaulting to 1",
       "in": "2 vanilla and 3 of the rest",
-      "expectStep": "mode",
+      "expectStep": "notesrecap",
       "expectCartLength": 3,
       "expectCartTotal": 56
     },
+    { "in": "skip", "expectStep": "mode" },
     { "in": "pickup", "expectStep": "confirm" },
     { "in": "yes", "expectStep": "menu", "expectReplyContains": "confirmed!" }
   ]

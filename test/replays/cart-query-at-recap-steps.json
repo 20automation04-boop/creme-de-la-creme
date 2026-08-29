@@ -1,0 +1,35 @@
+{
+  "name": "asking-to-see-the-cart-works-at-both-recap-steps",
+  "from": "19990000051",
+  "turns": [
+    { "in": "1", "expectStep": "menu" },
+    { "in": "1", "expectStep": "item" },
+    { "listId": "item:1:1", "expectCartLength": 1 },
+    { "in": "done", "expectStep": "qtyrecap" },
+
+    {
+      "in": "cart",
+      "expectStep": "qtyrecap",
+      "expectReplyContains": "Total: $7.00",
+      "expectReplyNotContains": "didn't catch",
+      "comment": "The command glossary advertises *cart* as working anywhere, but it was only wired at the menu/item steps. Here it fell into the quantity parser and came back as a parse failure — which also feeds the frustration ladder, so asking to see your own order twice got you offered a human agent."
+    },
+
+    {
+      "in": "how much is it so far",
+      "expectStep": "qtyrecap",
+      "expectReplyContains": "Total: $7.00",
+      "comment": "Prose form too. Resolved only AFTER the step's own parse returns zero matches, so it can never swallow a real quantity phrase — whatever reaches it was already going to be 'I didn't catch that'."
+    },
+
+    { "listId": "qty:each", "expectStep": "notesrecap" },
+
+    {
+      "in": "cart",
+      "expectStep": "notesrecap",
+      "expectReplyContains": "Total: $7.00",
+      "expectReplyNotContains": "didn't catch",
+      "comment": "Same gap at the notes recap, where free text is normally 'N: note'."
+    }
+  ]
+}

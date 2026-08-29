@@ -1,0 +1,32 @@
+{
+  "name": "note-shorthand-works-from-any-step-not-just-the-recap-prompt",
+  "from": "19990000043",
+  "turns": [
+    { "in": "1", "expectStep": "menu" },
+    { "in": "1", "expectStep": "item" },
+    { "in": "1", "expectStep": "item", "expectCartLength": 1, "comment": "Vanilla Bean" },
+    {
+      "comment": "setting a note mid-category, long before the bot ever asks — should stick without derailing the current step",
+      "in": "1: no sugar",
+      "expectStep": "item",
+      "expectCartLength": 1,
+      "expectReplyContains": "Vanilla Bean"
+    },
+    { "in": "2", "expectStep": "item", "expectCartLength": 2, "comment": "Coffee" },
+    {
+      "in": "2: extra hot",
+      "expectStep": "item",
+      "expectCartLength": 2,
+      "expectReplyContains": "Coffee"
+    },
+    { "in": "done", "expectStep": "qtyrecap" },
+    {
+      "comment": "amounts settled — since neither note was set through the guided recap itself, it still shows once, but both notes are already there to see",
+      "buttonId": "qty:each",
+      "expectStep": "notesrecap",
+      "expectReplyContains": "no sugar"
+    },
+    { "in": "skip", "expectStep": "mode" },
+    { "buttonId": "pickup", "expectStep": "confirm", "expectReplyContains": "extra hot" }
+  ]
+}

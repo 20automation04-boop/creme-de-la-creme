@@ -35,10 +35,15 @@
     {
       "comment": "amounts, plus a request on one of them, in a single message",
       "in": "2 vanilla, 1 chocolate no ice, 3 colada",
-      "expectStep": "mode",
+      "expectStep": "notesrecap",
       "expectCartLength": 3,
       "expectCartTotal": 42,
       "expectReplyContains": "no ice"
+    },
+    {
+      "comment": "the note already carried over from the qty recap — just continue",
+      "in": "skip",
+      "expectStep": "mode"
     },
     {
       "in": "pickup",

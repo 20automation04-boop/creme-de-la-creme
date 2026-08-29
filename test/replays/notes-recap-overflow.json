@@ -1,0 +1,40 @@
+{
+  "name": "notes-recap-overflow-cart-falls-back-to-item-number-shorthand",
+  "from": "19990000039",
+  "turns": [
+    { "in": "1", "expectStep": "menu" },
+    {
+      "comment": "11 lines — one more than NOTES_RECAP_MAX_ROWS (9 rows + the Done row = the WhatsApp list's 10-row cap). NOTE: with a cart this long the recap body itself exceeds the test harness's 300-char reply-summary cap, so this fixture checks structural outcomes (step/cart length/field values) rather than reply text for the later turns — see replay.test.js's repliesText().",
+      "presetCartLines": 11
+    },
+    {
+      "comment": "these preset lines all have an explicit quantity, so 'done' skips qtyrecap and goes straight to the notes recap",
+      "in": "done",
+      "expectStep": "notesrecap",
+      "expectCartLength": 11
+    },
+    {
+      "comment": "tap a visible row, then back out without leaving a note",
+      "listId": "noterecap:0",
+      "expectStep": "itemnote"
+    },
+    {
+      "in": "back",
+      "expectStep": "notesrecap",
+      "expectCartLength": 11
+    },
+    {
+      "comment": "item 10 (index 9) is past the visible rows — only reachable via the shorthand",
+      "in": "10: needs a fork",
+      "expectStep": "notesrecap",
+      "expectFieldAtLeast": ["cart.9.note.length", 12],
+      "expectFieldAtMost": ["cart.9.note.length", 12]
+    },
+    {
+      "comment": "Done is a native list tap, not typed text",
+      "listId": "noterecap:done",
+      "expectStep": "mode",
+      "expectCartLength": 11
+    }
+  ]
+}

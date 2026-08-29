@@ -1,0 +1,27 @@
+{
+  "name": "spanish-saltar-skips-instead-of-becoming-a-note-or-the-driver-landmark",
+  "from": "19990000050",
+  "turns": [
+    { "in": "2", "expectStep": "menu" },
+    { "in": "1", "expectStep": "item" },
+    { "listId": "item:1:1", "expectCartLength": 1 },
+    { "in": "listo", "expectStep": "qtyrecap" },
+    { "listId": "qty:each", "expectStep": "notesrecap" },
+
+    {
+      "in": "saltar",
+      "expectStep": "mode",
+      "comment": "'saltar' is the everyday Spanish for 'skip'. The skip list had 'omitir' but not this, so it fell through to the note parser and was rejected as unclear."
+    },
+
+    { "in": "entrega", "expectStep": "address" },
+    { "in": "Calle 5, Belmopan", "expectStep": "deliveryNote" },
+
+    {
+      "in": "saltar",
+      "expectStep": "confirm",
+      "expectFieldAtMost": ["deliveryNote.length", 0],
+      "comment": "Worse at this step than at the note recap: 'saltar' was not rejected, it was STORED — the driver was handed the word 'saltar' as the find-me landmark. Same family as the stale 'Done' tap that once became a delivery address."
+    }
+  ]
+}

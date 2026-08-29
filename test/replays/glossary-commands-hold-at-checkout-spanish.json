@@ -1,0 +1,30 @@
+{
+  "name": "the-glossary-commands-hold-at-the-checkout-steps-in-spanish-too",
+  "from": "19990000057",
+  "turns": [
+    { "in": "2", "expectStep": "menu" },
+    { "in": "atras", "expectStep": "menu", "expectReplyNotContains": "No entendí" },
+    { "in": "2", "expectStep": "item" },
+    { "listId": "item:2:1", "expectCartLength": 1 },
+    { "in": "listo", "expectStep": "qtyrecap" },
+    { "in": "listo", "expectStep": "notesrecap", "expectReplyNotContains": "No entendí" },
+    { "in": "omitir", "expectStep": "mode" },
+
+    {
+      "in": "carrito",
+      "expectStep": "mode",
+      "expectReplyContains": ["Total: $9.00"],
+      "expectReplyNotContains": "cuál"
+    },
+
+    { "in": "recoger", "expectStep": "confirm" },
+
+    {
+      "in": "cuanto llevo",
+      "expectStep": "confirm",
+      "expectReplyContains": ["Total: $9.00"],
+      "expectReplyNotContains": "para confirmar",
+      "comment": "Pickup, so no fee line — the mirror of the delivery case in the English fixture."
+    }
+  ]
+}

@@ -1,0 +1,12 @@
+{
+  "name": "a-kriol-opener-auto-routes-to-english-not-the-picker",
+  "from": "19990000040",
+  "turns": [
+    {
+      "in": "hi unu, mi waahn wan smoothie fi tek weh",
+      "expectStep": "menu",
+      "expectReplyContains": "Ordering is easy",
+      "expectReplyNotContains": "Elige tu idioma"
+    }
+  ]
+}

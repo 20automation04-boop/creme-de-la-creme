@@ -1,0 +1,31 @@
+{
+  "name": "remove-item-ambiguous-name-asks-which-one-instead-of-guessing",
+  "from": "19990000051",
+  "turns": [
+    { "in": "1", "expectStep": "menu" },
+    { "in": "2", "expectStep": "item" },
+    { "comment": "Salt Caramel Coffee", "in": "1", "expectStep": "item", "expectCartLength": 1 },
+    { "comment": "French Vanilla Coffee — both contain the word 'coffee'", "in": "2", "expectStep": "item", "expectCartLength": 2, "expectCartTotal": 18 },
+    {
+      "comment": "'the coffee' matches BOTH lines — must never guess which one",
+      "in": "remove the coffee",
+      "expectStep": "item",
+      "expectCartLength": 2,
+      "expectCartTotal": 18
+    },
+    {
+      "comment": "tapping the first candidate proposes removing exactly that one",
+      "listId": "removeidx:0",
+      "expectStep": "item",
+      "expectCartLength": 2,
+      "expectReplyContains": "Salt Caramel Coffee"
+    },
+    {
+      "in": "yes",
+      "expectStep": "item",
+      "expectCartLength": 1,
+      "expectCartTotal": 9,
+      "expectReplyContains": "Removed"
+    }
+  ]
+}

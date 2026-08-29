@@ -1,0 +1,35 @@
+{
+  "name": "one-message-order-and-delivery-address-skips-mode-and-address-steps",
+  "from": "19990000101",
+  "turns": [
+    {
+      "in": "hi",
+      "expectStep": "menu"
+    },
+    {
+      "in": "2 vanilla bean delivered to 123 Main St",
+      "expectStep": "menu",
+      "expectCartLength": 1,
+      "expectReplyContains": "Added"
+    },
+    {
+      "in": "done",
+      "expectStep": "notesrecap"
+    },
+    {
+      "in": "skip",
+      "expectStep": "deliveryNote",
+      "expectReplyContains": "driver find you"
+    },
+    {
+      "in": "skip",
+      "expectStep": "confirm",
+      "expectReplyContains": ["123 Main St", "Confirm"]
+    },
+    {
+      "in": "yes",
+      "expectStep": "menu",
+      "expectReplyContains": "confirmed!"
+    }
+  ]
+}

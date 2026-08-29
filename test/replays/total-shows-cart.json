@@ -1,0 +1,12 @@
+{
+  "name": "total-keyword-shows-the-cart-like-cart-does",
+  "from": "19990000042",
+  "turns": [
+    { "in": "1", "expectStep": "menu" },
+    { "in": "1", "expectStep": "item" },
+    { "in": "1", "expectStep": "item", "expectCartLength": 1 },
+    { "in": "Total", "expectStep": "item", "expectCartLength": 1, "expectReplyContains": "7.00" },
+    { "in": "0", "expectStep": "menu" },
+    { "in": "total", "expectStep": "menu", "expectReplyContains": "7.00" }
+  ]
+}

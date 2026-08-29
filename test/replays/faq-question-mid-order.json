@@ -32,8 +32,17 @@
     },
     {
       "in": "2",
-      "expectStep": "mode",
+      "expectStep": "notesrecap",
       "expectCartTotal": 14
+    },
+    {
+      "in": "what are the ways to pay",
+      "expectStep": "notesrecap",
+      "expectReplyContains": "cash"
+    },
+    {
+      "in": "skip",
+      "expectStep": "mode"
     },
     {
       "in": "do you deliver",

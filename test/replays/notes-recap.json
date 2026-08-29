@@ -1,0 +1,46 @@
+{
+  "name": "notes-recap-lets-you-add-a-request-per-item-after-picking-is-done",
+  "from": "19990000038",
+  "turns": [
+    { "in": "1", "expectStep": "menu" },
+    { "in": "1", "expectStep": "item" },
+    { "comment": "Vanilla Bean — a tap never asks about requests", "in": "1", "expectStep": "item", "expectCartLength": 1, "expectReplyNotContains": "special request" },
+    { "comment": "Coffee — same, no interruption per item", "in": "2", "expectStep": "item", "expectCartLength": 2, "expectReplyNotContains": "special request" },
+    { "in": "done", "expectStep": "qtyrecap" },
+    { "comment": "amounts settled first, THEN the notes recap — never before", "buttonId": "qty:each", "expectStep": "notesrecap", "expectCartLength": 2, "expectCartTotal": 14 },
+    {
+      "comment": "a stale tap from an earlier message must not derail the recap",
+      "buttonId": "pickup",
+      "expectStep": "notesrecap"
+    },
+    {
+      "comment": "tap the second row (Coffee) to add a request for just that item",
+      "listId": "noterecap:1",
+      "expectStep": "itemnote"
+    },
+    {
+      "comment": "a stale tap can't become the note text either",
+      "buttonId": "pickup",
+      "expectStep": "itemnote"
+    },
+    {
+      "in": "extra hot",
+      "expectStep": "notesrecap",
+      "expectReplyContains": "extra hot"
+    },
+    {
+      "comment": "the item-number shorthand sets a note without tapping",
+      "in": "1: light ice",
+      "expectStep": "notesrecap",
+      "expectReplyContains": "light ice"
+    },
+    {
+      "comment": "both requests carry through into the order recap at checkout",
+      "in": "skip",
+      "expectStep": "mode",
+      "expectReplyContains": "light ice"
+    },
+    { "buttonId": "pickup", "expectStep": "confirm", "expectReplyContains": "extra hot" },
+    { "in": "yes", "expectStep": "menu", "expectReplyContains": "confirmed!" }
+  ]
+}

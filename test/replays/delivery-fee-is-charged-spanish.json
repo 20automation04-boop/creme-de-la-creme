@@ -1,0 +1,55 @@
+{
+  "name": "the-delivery-fee-reaches-the-total-and-the-driver-in-spanish-too",
+  "from": "19990000054",
+  "turns": [
+    {
+      "in": "2",
+      "expectStep": "menu"
+    },
+    {
+      "in": "2",
+      "expectStep": "item"
+    },
+    {
+      "listId": "item:2:1",
+      "expectCartTotal": 9
+    },
+    {
+      "in": "listo",
+      "expectStep": "qtyrecap"
+    },
+    {
+      "listId": "qty:each",
+      "expectStep": "notesrecap"
+    },
+    {
+      "in": "omitir",
+      "expectStep": "mode",
+      "expectReplyContains": "Total: $9.00"
+    },
+    {
+      "in": "entrega",
+      "expectStep": "address"
+    },
+    {
+      "in": "Calle 5, Belmopan",
+      "expectStep": "deliveryNote"
+    },
+    {
+      "in": "omitir",
+      "expectStep": "confirm",
+      "expectReplyContains": [
+        "Entrega - $5.00",
+        "Total: $14.00"
+      ],
+      "comment": "The fee line is translated, not a hardcoded English string leaking into the Spanish flow."
+    },
+    {
+      "in": "si",
+      "expectSentToContains": [
+        "__DRIVER__",
+        "Total a cobrar: $14.00 BZD"
+      ]
+    }
+  ]
+}

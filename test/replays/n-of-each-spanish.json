@@ -1,0 +1,21 @@
+{
+  "name": "n-de-cada-sets-every-line-to-that-amount-not-hardcoded-1",
+  "from": "19990000045",
+  "turns": [
+    { "comment": "found live: a real customer typed '2 de cada' for a 6-item cart and got stuck on repeated 'didn't understand' replies", "in": "2", "expectStep": "menu" },
+    { "in": "2", "expectStep": "item" },
+    { "comment": "Berries n' Cream", "in": "8", "expectStep": "item", "expectCartLength": 1 },
+    { "comment": "Snickers n' Cream", "in": "6", "expectStep": "item", "expectCartLength": 2 },
+    { "in": "listo", "expectStep": "qtyrecap" },
+    {
+      "comment": "used to fail to match at all (only '1'/'uno'/'un de cada' was recognized) and, even when it did match, hardcoded qty=1 regardless of the number typed",
+      "in": "2 de cada",
+      "expectStep": "notesrecap",
+      "expectCartLength": 2,
+      "expectCartTotal": 36
+    },
+    { "in": "listo", "expectStep": "mode" },
+    { "in": "recoger", "expectStep": "confirm" },
+    { "in": "si", "expectStep": "menu", "expectReplyContains": "confirmada" }
+  ]
+}

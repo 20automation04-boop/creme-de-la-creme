@@ -1,0 +1,34 @@
+{
+  "name": "qty-recap-row-tap-picks-size-then-quantity-for-a-sized-item",
+  "from": "19990000043",
+  "turns": [
+    { "in": "1", "expectStep": "menu" },
+    { "in": "6", "expectStep": "item" },
+    { "comment": "Papaya smoothie, sized — tap-to-add puts it in at the default Regular size", "in": "1", "expectStep": "item", "expectCartLength": 1, "expectCartTotal": 6 },
+    { "in": "done", "expectStep": "qtyrecap" },
+    {
+      "comment": "tap the row for the only cart line — it's sized, so size buttons come first",
+      "listId": "qtyrow:0",
+      "expectStep": "itemqty",
+      "expectReplyContains": "size"
+    },
+    {
+      "comment": "pick Large — updates the line's name/price and moves straight to quantity buttons",
+      "buttonId": "linesize:0:2",
+      "expectStep": "itemqty",
+      "expectCartTotal": 8,
+      "expectReplyContains": "how many"
+    },
+    {
+      "comment": "pick quantity 2 — this was the only cart line, so nothing's left implicit and it goes straight through to checkout instead of bouncing back to the qty recap list",
+      "listId": "lineqty:0:2",
+      "expectStep": "notesrecap",
+      "expectCartLength": 1,
+      "expectCartTotal": 16,
+      "expectReplyContains": "papaya"
+    },
+    { "in": "skip", "expectStep": "mode" },
+    { "in": "pickup", "expectStep": "confirm" },
+    { "in": "yes", "expectStep": "menu", "expectReplyContains": "confirmed!" }
+  ]
+}

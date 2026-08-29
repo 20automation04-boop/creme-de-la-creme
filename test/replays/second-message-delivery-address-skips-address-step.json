@@ -1,6 +1,6 @@
 {
-  "name": "cancel-order-within-window",
-  "from": "19990000014",
+  "name": "answering-pickup-or-delivery-with-an-address-skips-the-address-step",
+  "from": "19990000102",
   "turns": [
     {
       "in": "1",
@@ -12,7 +12,9 @@
     },
     {
       "in": "1",
-      "expectStep": "item"
+      "expectStep": "item",
+      "expectCartLength": 1,
+      "expectReplyContains": "Added"
     },
     {
       "in": "done",
@@ -27,17 +29,19 @@
       "expectStep": "mode"
     },
     {
-      "in": "pickup",
-      "expectStep": "confirm"
+      "in": "deliver it to 456 Ocean Ave",
+      "expectStep": "deliveryNote",
+      "expectReplyContains": "driver find you"
+    },
+    {
+      "in": "skip",
+      "expectStep": "confirm",
+      "expectReplyContains": ["456 Ocean Ave", "Confirm"]
     },
     {
       "in": "yes",
       "expectStep": "menu",
       "expectReplyContains": "confirmed!"
-    },
-    {
-      "in": "cancel order",
-      "expectReplyContains": "couldn't find that order"
     }
   ]
 }

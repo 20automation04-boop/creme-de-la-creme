@@ -1,0 +1,33 @@
+{
+  "name": "asking-to-see-the-cart-works-at-the-recaps-in-spanish-too",
+  "from": "19990000052",
+  "turns": [
+    { "in": "2", "expectStep": "menu" },
+    { "in": "2", "expectStep": "item" },
+    { "listId": "item:2:1", "expectCartLength": 1 },
+    { "in": "listo", "expectStep": "qtyrecap" },
+
+    {
+      "in": "carrito",
+      "expectStep": "qtyrecap",
+      "expectReplyContains": "Total: $9.00",
+      "expectReplyNotContains": "No entendí"
+    },
+
+    {
+      "in": "cuanto llevo",
+      "expectStep": "qtyrecap",
+      "expectReplyContains": "Total: $9.00",
+      "comment": "Accent-free typing is normal on a phone keyboard — 'cuanto' without the accent has to work as well as 'cuánto'."
+    },
+
+    { "listId": "qty:each", "expectStep": "notesrecap" },
+
+    {
+      "in": "carrito",
+      "expectStep": "notesrecap",
+      "expectReplyContains": "Total: $9.00",
+      "expectReplyNotContains": "No entendí"
+    }
+  ]
+}

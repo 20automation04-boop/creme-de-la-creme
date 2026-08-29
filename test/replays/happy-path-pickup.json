@@ -22,8 +22,12 @@
     },
     {
       "in": "3",
-      "expectStep": "mode",
+      "expectStep": "notesrecap",
       "expectCartTotal": 21
+    },
+    {
+      "in": "skip",
+      "expectStep": "mode"
     },
     {
       "in": "pickup",

@@ -1,0 +1,26 @@
+{
+  "name": "remove-item-by-text-requires-a-yes-before-actually-removing",
+  "from": "19990000049",
+  "turns": [
+    { "in": "1", "expectStep": "menu" },
+    { "in": "1", "expectStep": "item" },
+    { "comment": "Vanilla Bean", "in": "1", "expectStep": "item", "expectCartLength": 1 },
+    { "comment": "Coffee", "in": "2", "expectStep": "item", "expectCartLength": 2, "expectCartTotal": 14 },
+    {
+      "comment": "found live: worried a misparsed removal could silently corrupt the cart, so this must NEVER remove on the strength of the text alone — only propose it",
+      "in": "remove the vanilla bean",
+      "expectStep": "item",
+      "expectCartLength": 2,
+      "expectCartTotal": 14,
+      "expectReplyContains": "Vanilla Bean"
+    },
+    {
+      "comment": "now the explicit yes actually removes it",
+      "in": "yes",
+      "expectStep": "item",
+      "expectCartLength": 1,
+      "expectCartTotal": 7,
+      "expectReplyContains": "Removed"
+    }
+  ]
+}

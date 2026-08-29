@@ -19,10 +19,15 @@
     },
     {
       "buttonId": "qty:each",
+      "expectStep": "notesrecap",
+      "expectCartLength": 1
+    },
+    {
+      "comment": "cart is food-only, so the pairing must be a drink (category 1), the mirror image of checkout-upsell.json",
+      "listId": "noterecap:done",
       "expectStep": "mode",
       "expectCartLength": 1,
-      "expectReplyContains": "goes great with your *Grilled Cheese*",
-      "comment": "cart is food-only, so the pairing must be a drink (category 1), the mirror image of checkout-upsell.json"
+      "expectReplyContains": "goes great with your *Grilled Cheese*"
     },
     {
       "comment": "accepting adds exactly one drink and stays at mode",

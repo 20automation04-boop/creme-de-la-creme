@@ -33,6 +33,10 @@
     },
     {
       "in": "1",
+      "expectStep": "notesrecap"
+    },
+    {
+      "in": "listo",
       "expectStep": "mode"
     },
     {

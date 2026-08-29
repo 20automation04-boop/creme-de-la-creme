@@ -143,11 +143,19 @@ for (const file of fixtureFiles) {
       if (turn.expectCartLength !== undefined) {
         assert.equal(bot.sessions[from].cart.length, turn.expectCartLength, `${label}: expected ${turn.expectCartLength} cart line(s), got ${bot.sessions[from].cart.length}`);
       }
+      // Accepts a string or an array of them. An array is ALL-of, not any-of:
+      // one reply often has to satisfy several independent claims at once
+      // (a delivery order's confirm screen shows both the fee line and the
+      // total it produced), and splitting those across turns would silently
+      // send extra messages rather than assert twice about the same one.
       if (turn.expectReplyContains) {
-        assert.ok(
-          replyText.toLowerCase().includes(turn.expectReplyContains.toLowerCase()),
-          `${label}: expected reply to contain "${turn.expectReplyContains}", got: ${replyText}`
-        );
+        const needles = Array.isArray(turn.expectReplyContains) ? turn.expectReplyContains : [turn.expectReplyContains];
+        for (const needle of needles) {
+          assert.ok(
+            replyText.toLowerCase().includes(String(needle).toLowerCase()),
+            `${label}: expected reply to contain "${needle}", got: ${replyText}`
+          );
+        }
       }
       if (turn.expectReplyNotContains) {
         assert.ok(
@@ -177,6 +185,22 @@ for (const file of fixtureFiles) {
         const target = resolvePlaceholder(turn.expectNotSentTo);
         const gotSentToTarget = sent.some(s => s.to === target);
         assert.ok(!gotSentToTarget, `${label}: expected NO message sent to ${target} this turn, but one was sent`);
+      }
+      // Content check against a message sent to SOMEONE ELSE — the driver or
+      // the owner, not the customer. expectReplyContains above only ever sees
+      // the customer's own replies, so without this there was no way to pin
+      // what staff are actually told: the driver's "total to collect" line
+      // was wrong for every delivery order and no fixture could have caught
+      // it. Takes ["<to>", "<substring>"]; <to> accepts the same
+      // __DRIVER__/__OWNER__ placeholders as `from`.
+      if (turn.expectSentToContains) {
+        const [rawTarget, needle] = turn.expectSentToContains;
+        const target = resolvePlaceholder(rawTarget);
+        const text = repliesText(sent, target);
+        assert.ok(
+          text.toLowerCase().includes(String(needle).toLowerCase()),
+          `${label}: expected the message sent to ${target} to contain "${needle}", got: ${text || '(nothing sent to them)'}`
+        );
       }
     }
   });
