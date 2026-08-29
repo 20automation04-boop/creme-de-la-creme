@@ -65,6 +65,24 @@ current value in both `DRIVER_NUMBERS` and `OWNER_NUMBERS`).
    directory. Editing `index.js` locally does nothing to the live bot until
    you deploy. Requires the Railway CLI logged in to the account that owns
    that project.
+
+   **That Railway project contains TWO services, and one of them is
+   permanently broken on purpose.** `railway status` shows:
+
+   - `creme-de-la-creme-bot` — ● Online. **This is the bot.** It is what
+     the local link points at, so a plain `railway up` targets it.
+   - `creme-de-la-creme` — ● Failed, always. It auto-deploys from the
+     GitHub repo's `main` branch, which is the unrelated README/"taste
+     skill" content described under "Repo / branch layout" below. There is
+     no bot in it and there never was; the failure is expected and is not a
+     symptom of anything being wrong.
+
+   Do not "fix" the Failed one by deploying the bot into it. Both services
+   would then run the same code against the same WhatsApp number, and every
+   customer message would be answered twice. If `railway up` ever asks which
+   service to use, the answer is `creme-de-la-creme-bot` — confirm with
+   `railway status` first, never guess.
+
    There IS CI: `.github/workflows/test.yml` runs `npm test` on every push
    and PR, with no credentials (BOT_DRY_RUN keeps it off the live number and
    the real Sheet). It covers the state machine, the ordering flow, the sheet
