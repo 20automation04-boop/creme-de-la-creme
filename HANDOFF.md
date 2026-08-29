@@ -7,17 +7,33 @@ See `CHANGELOG.md` for what changed recently and why — several decisions in
 this codebase look arbitrary without the reason behind them, and it records
 the bugs that motivated the guards you'll find scattered through `index.js`.
 
-## This is live in production, not a demo
+## Status: pre-launch (confirmed directly with the owner, 2026-08-28)
 
-This is a WhatsApp food-ordering bot for a real business — **Créme De La
-Créme**, a drinks/food shop in Belize. Orders placed through it write to a
-real Google Sheet that kitchen/management staff act on, and replies go out
-via a paid WhatsApp Business number customers actually text. Treat any code
-path that writes to the Sheet or sends a WhatsApp message as touching a real,
-external, shared system — not something to fire casually during testing.
+**Créme De La Créme is not yet taking real customer orders.** The owner
+confirmed this directly when asked point-blank — not inferred from behavior.
+Earlier revisions of this file said "live in production," written on the
+assumption that careful, production-grade handling implied a live business;
+that assumption was wrong. The number, Sheet, and menu are all real (this
+is a genuine business preparing to launch, not a throwaway sandbox), but
+no paying customer is ordering through it today.
 
-**Live number:** +501 606-9511. **Shop's own number:** +501 616-2492 (also
-the current value in both `DRIVER_NUMBERS` and `OWNER_NUMBERS`).
+**What that changes:** the "every write/send touches a real customer"
+urgency can relax somewhat while building — a stray test order isn't
+disrupting a real customer's evening.
+
+**What that does NOT change:** the dashboards (`/kitchen`, `/manager`,
+`/driver`) expose real phone numbers, addresses, and order data regardless
+of launch status, and their passwords should stay private — treat them the
+same as any other credential. Nobody has confirmed sharing them externally
+is fine; don't assume it because the launch-status question got a relaxed
+answer. If unsure, ask the owner the specific question, not the general one.
+
+**When this actually launches**, re-instate full production caution
+everywhere below — that transition should get its own explicit
+confirmation and a dated note here, the same way this one did.
+
+**Number:** +501 606-9511. **Shop's own number:** +501 616-2492 (also the
+current value in both `DRIVER_NUMBERS` and `OWNER_NUMBERS`).
 
 ## Stack
 
@@ -242,6 +258,11 @@ New code that records anything per-item should key off `item.sheetId`, never
 off the item's index. `test/menu-sheet.test.js` pins this.
 ## Testing safety rules (important)
 
+Pre-launch status (above) means no paying customer is downstream right now
+— but `DRIVER_NUMBERS`/`OWNER_NUMBERS`/`SHOP_INFO.phone` are still the
+owner's own real phone, a real device a real person checks. These rules
+still apply; "pre-launch" is not "nobody real is on the other end."
+
 - Safe to test freely: syntax/type checks, running the server locally,
   read-only Sheets calls, and webhook simulations aimed at an obviously-fake
   phone number (e.g. `10000000000`) — Chakra bounces these as invalid
@@ -258,6 +279,9 @@ off the item's index. `test/menu-sheet.test.js` pins this.
   number for the duration of the test and revert before committing.
 - Confirm with whoever's driving before any real Sheets write or real
   WhatsApp send during testing.
+- Dashboard passwords (`KITCHEN_PASSWORD`/`MANAGER_PASSWORD`/
+  `DRIVER_PASSWORD`) stay private regardless of launch status — they gate
+  real phone numbers and addresses collected during testing.
 
 ## Repo / branch layout
 
