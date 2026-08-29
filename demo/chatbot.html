@@ -1,5 +1,5 @@
 <meta charset="utf-8">
-<title>Pedidos Bot</title>
+<title>Order Line</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600;700&family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:ital,wght@0,400;0,500;0,600;1,400&display=swap">
@@ -182,7 +182,7 @@ details.json pre{margin:0; padding:0 12px 12px; overflow-x:auto; font-family:"IB
   <header class="mast">
     <div class="mast-id">
       <div class="eyebrow">Live demo</div>
-      <h1>Pedidos Bot</h1>
+      <h1>Order Line</h1>
     </div>
     <p class="mast-note">An ordering bot for WhatsApp. Everything it knows &mdash; the menu, the prices, the drivers &mdash; is in the setup panel. Change it and the <b>conversation updates mid&#8209;chat</b>. Nothing calls out to a server.</p>
   </header>
@@ -209,8 +209,8 @@ details.json pre{margin:0; padding:0 12px 12px; overflow-x:auto; font-family:"IB
       <div class="con-head">
         <h2>Live setup</h2>
         <div class="langsw" role="group" aria-label="Bot language">
-          <button type="button" id="langEs" aria-pressed="true">Español</button>
-          <button type="button" id="langEn" aria-pressed="false">English</button>
+          <button type="button" id="langEn" aria-pressed="true">English</button>
+          <button type="button" id="langEs" aria-pressed="false">Español</button>
         </div>
       </div>
       <p class="con-sub">These are the fields you'd fill in from a client's own menu. Edit any of them while they watch &mdash; the bot changes on the next message.</p>
@@ -282,42 +282,43 @@ details.json pre{margin:0; padding:0 12px 12px; overflow-x:auto; font-family:"IB
    Change a value, save the file, reload. Everything below is plumbing.
    ══════════════════════════════════════════════════════════════════════ */
 const PITCH_CONFIG = {
-  shop: "Sabor Norteño",
-  bot:  "Pedidos",
-  lang: "es",              // "es" or "en" — switchable live in the panel
-  currency: "$",
-  fee: "35",               // delivery fee, same currency
+  shop: "Riverside Kitchen",
+  bot:  "Orders",
+  lang: "en",              // "en" or "es" — switchable live in the panel
+  currency: "$",           // Belize dollars; some shops prefer to write "BZ$"
+  fee: "8",                // delivery fee, same currency
   orderNo: "1042",         // next order number; ticks up on each order
-  hours: "Mar–Dom 12:00–22:00",
-  phone: "+52 55 1234 5678",
-  payment: "Efectivo, tarjeta y transferencia",
-  zone: "Centro y colonias vecinas, hasta 8 km",
+  hours: "Tue–Sun 11:00am–10:00pm",
+  phone: "+501 610-2244",
+  payment: "Cash, card, or bank transfer",
+  zone: "Belize City, up to 5 miles out",
 
   greeting: {
-    es: "¡Hola! Soy Pedidos de Sabor Norteño 🌮 Escríbeme lo que se te antoje y te lo mando. Pide el menú para ver todo.",
-    en: "Hi! This is Pedidos at Sabor Norteño. Tell me what you'd like and I'll get it out to you. Ask for the menu to see everything."
+    en: "Hi! This is Orders at Riverside Kitchen. Tell me what you want and we'll run it out to you. Ask for the menu to see everything.",
+    es: "¡Hola! Soy Orders de Riverside Kitchen. Dime qué quieres y te lo mandamos. Pide el menú para ver todo."
   },
 
-  // The bot matches on these names, accent- and case-insensitively, and
-  // picks up quantities written as digits or words ("2 tacos", "dos tacos").
+  // The bot matches on these names, accent- and case-insensitively, and picks
+  // up quantities written as digits or words ("2 salbutes", "two salbutes").
   menu: [
-    { name:"Tacos al pastor",   price:"18",  note:"por pieza" },
-    { name:"Quesadilla",        price:"45",  note:"maíz o harina" },
-    { name:"Torta de milanesa", price:"85",  note:"" },
-    { name:"Agua de horchata",  price:"30",  note:"1 litro" }
+    { name:"Rice and beans with stew chicken", price:"14", note:"with potato salad" },
+    { name:"Garnaches",                        price:"3",  note:"order of 3" },
+    { name:"Salbutes",                         price:"6",  note:"chicken or beef, order of 3" },
+    { name:"Meat pie",                         price:"2",  note:"each" },
+    { name:"Seaweed shake",                    price:"7",  note:"16 oz" }
   ],
 
   // Whoever is "available" gets assigned when an order is confirmed.
   drivers: [
-    { unit:"04", name:"Rosa Delgado",  status:"available" },
-    { unit:"07", name:"Marcus Bell",   status:"delivering" },
-    { unit:"12", name:"Tomás Ruiz",    status:"available" }
+    { unit:"04", name:"Kenrick Flowers", status:"available" },
+    { unit:"07", name:"Alba Requena",    status:"delivering" },
+    { unit:"12", name:"Dwayne Palacio",  status:"available" }
   ],
 
   // Trigger words are comma-separated. First match wins.
   answers: [
-    { trigger:"vegetariano, vegano, sin carne",
-      reply:"Sí — la quesadilla y la torta se pueden hacer sin carne, y el agua de horchata es vegana. Dime cuál quieres y lo anoto así." }
+    { trigger:"vegetarian, vegan, no meat",
+      reply:"Yes — the garnaches are vegetarian as they come, and we can do the rice and beans without the chicken. The seaweed shake has milk in it, so say the word if you need that left out." }
   ]
 };
 
@@ -342,7 +343,7 @@ const T = {
     human: (ph,h) => "Te comunico con alguien: " + ph + ", en horario de " + h + ". O déjame aquí tu duda y la paso.",
     thanks:"¡Gracias a ti! ¿Se te ofrece algo más?",
     fallback:"No te entendí bien 🤔 Puedo mostrarte el menú, tomar tu pedido, decirte el costo de envío o el estado de tu pedido. ¿Qué necesitas?",
-    chips:["Ver el menú","Quiero 2 tacos al pastor","¿Cuánto es el envío?","Confirmar"],
+    chips:{ menu:"Ver el menú", order:n => "Quiero 2 " + n, fee:"¿Cuánto es el envío?", confirm:"Confirmar" },
     updated:"pedido actualizado"
   },
   en:{
@@ -364,7 +365,7 @@ const T = {
     human: (ph,h) => "I'll put you through: " + ph + ", during " + h + ". Or leave your question here and I'll pass it on.",
     thanks:"Thank you! Anything else?",
     fallback:"I didn't quite catch that. I can show the menu, take your order, quote delivery, or check your order status. What do you need?",
-    chips:["Show me the menu","I want 2 tacos al pastor","How much is delivery?","Confirm"],
+    chips:{ menu:"Show me the menu", order:n => "2 " + n, fee:"How much is delivery?", confirm:"Confirm" },
     updated:"order updated"
   }
 };
@@ -397,8 +398,13 @@ const money = n => cfg.currency + n.toFixed(2).replace(/\.00$/,"");
 const initials = s => (String(s).trim().split(/\s+/).slice(0,2).map(w => w[0] || "").join("") || "??").toUpperCase();
 const escRe = s => s.replace(/[.*+?^${}()|[\]\\]/g,"\\$&");
 
-const WORDNUM = { uno:1, una:1, dos:2, tres:3, cuatro:4, cinco:5, seis:6, siete:7, ocho:8,
+const WORDNUM = { un:1, uno:1, una:1, dos:2, tres:3, cuatro:4, cinco:5, seis:6, siete:7, ocho:8,
                   one:1, two:2, three:3, four:4, five:5, six:6, seven:7, eight:8 };
+const NUMTOK = Object.keys(WORDNUM).join("|");
+// English dish names are full of connectors ("rice and beans WITH stew chicken").
+// Without this, any message containing "with" would match that item.
+const STOP = new Set(["with","from","your","plus","this","that","them","and","the","for",
+                      "con","del","los","las","por","para","una","uno"]);
 
 /* ── order maths ──────────────────────────────────────────────────── */
 const subtotal = () => cart.reduce((s,l) => s + num(l.price) * l.qty, 0);
@@ -411,13 +417,22 @@ function parseItems(raw){
   for (const item of cfg.menu){
     const full = norm(item.name);
     if (!full) continue;
-    const tokens = full.split(/\s+/).filter(w => w.length >= 4);
-    const needles = [full, ...tokens].filter(n => q.includes(n));
-    if (!needles.length) continue;
-    const needle = needles.sort((a,b) => b.length - a.length)[0];
-    const m = q.match(new RegExp("(\\d+|" + Object.keys(WORDNUM).join("|") + ")\\s*(?:x|de\\s+)?\\s*" + escRe(needle)));
-    const qty = m ? (parseInt(m[1],10) || WORDNUM[m[1]] || 1) : 1;
-    hits.push({ item, qty: Math.max(1, Math.min(qty, 99)), at: q.indexOf(needle) });
+    const tokens = full.split(/\s+/).filter(w => w.length >= 4 && !STOP.has(w));
+    const present = [full, ...tokens].filter(n => q.includes(n));
+    if (!present.length) continue;
+
+    // match on the most specific phrase that actually appears
+    const needle = present.sort((a,b) => b.length - a.length)[0];
+    const at = q.indexOf(needle);
+
+    // the quantity is the last number in the short run of words before the
+    // item, so "2 rice and beans" reads as 2 even though "2" isn't adjacent
+    const before = q.slice(Math.max(0, at - 24), at);
+    const nums = [...before.matchAll(new RegExp("(?:^|\\s)(\\d+|" + NUMTOK + ")(?=\\s|$)", "g"))];
+    const tok = nums.length ? nums[nums.length - 1][1] : null;
+    const qty = tok ? (parseInt(tok, 10) || WORDNUM[tok] || 1) : 1;
+
+    hits.push({ item, qty: Math.max(1, Math.min(qty, 99)), at });
   }
   return hits.sort((a,b) => a.at - b.at);
 }
@@ -513,18 +528,19 @@ function answer(raw){
     return { text:L.placed + (o.driver ? "" : "\n\n" + L.noDriver), block:ticketBlock(o,"preparing") };
   }
 
-  // 2. anything on the menu, by name — this is the ordering path
+  // 2. answers you wrote in the panel — an answer you set explicitly beats
+  // fuzzy menu matching, so "no meat" doesn't order the meat pie
+  for (const a of cfg.answers){
+    const trigs = a.trigger.split(",").map(x => norm(x)).filter(Boolean);
+    if (trigs.length && trigs.some(x => q.includes(x)) && a.reply.trim()) return { text:a.reply };
+  }
+
+  // 3. anything on the menu, by name — this is the ordering path
   const hits = parseItems(q);
   if (hits.length && !has("cuanto cuesta","how much is the","precio de")){
     addToCart(hits);
     const n = hits.reduce((s,h) => s + h.qty, 0);
     return { text:L.added(n) + "\n" + L.cartHead + "\n" + L.confirmHint, block:cartBlock() };
-  }
-
-  // 3. answers you wrote in the panel
-  for (const a of cfg.answers){
-    const trigs = a.trigger.split(",").map(x => norm(x)).filter(Boolean);
-    if (trigs.length && trigs.some(x => q.includes(x)) && a.reply.trim()) return { text:a.reply };
   }
 
   // 4. built-ins
@@ -533,7 +549,8 @@ function answer(raw){
 
   // tracking is checked before the cart, so "¿dónde va mi pedido?" reads as
   // tracking rather than matching "mi pedido" and showing an empty cart
-  if (has("donde va","donde esta","status","estado","rastrear","track","ya viene","how long")){
+  if (has("donde va","donde esta","status","estado","rastrear","track","ya viene","how long",
+          "where is my","where's my","wheres my","where my","on the way","eta","ready yet")){
     if (order) return { text:L.statusHead, block:ticketBlock(order,"on-the-way") };
     if (cart.length) return { text:L.cartHead + "\n" + L.confirmHint, block:cartBlock() };
     return { text:L.statusNone };
@@ -542,7 +559,7 @@ function answer(raw){
   if (has("mi pedido","mi orden","carrito","cart","my order","cuanto llevo","total"))
     return cart.length ? { text:L.cartHead + "\n" + L.confirmHint, block:cartBlock() } : { text:L.cartEmpty };
 
-  if (has("envio","domicilio","delivery","shipping","cuanto cobran por"))
+  if (has("envio","domicilio","deliver","shipping","how far","cuanto cobran por"))
     return { text:L.fee(cfg.currency, num(cfg.fee).toFixed(0), cfg.zone) };
 
   if (has("horario","abren","cierran","hora","hours","open","close"))
@@ -600,7 +617,9 @@ function paintChrome(){
 
   const chips = $("chips");
   chips.textContent = "";
-  for (const s of L.chips) chips.append(el("button",{className:"chip", type:"button", textContent:s, onclick(){ ask(s); }}));
+  const first = cfg.menu.find(m => m.name.trim());
+  const list = [L.chips.menu, first ? L.chips.order(first.name) : null, L.chips.fee, L.chips.confirm].filter(Boolean);
+  for (const s of list) chips.append(el("button",{className:"chip", type:"button", textContent:s, onclick(){ ask(s); }}));
   $("jsonOut").textContent = JSON.stringify(cfg, null, 2);
 }
 
