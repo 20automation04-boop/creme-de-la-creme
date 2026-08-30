@@ -92,6 +92,28 @@ chose to drop the claim. `SHOP_INFO.minDeliveryOrder` is kept but marked
 unused, with a note that putting the promise back means also gating the
 `'mode'` step on it, or the copy drifts from the behaviour again.
 
+### Regression tests for the item-question and delivery-question fixes
+
+The two fixes that stopped questions being read as orders ("how much is the
+chicken & cheese sub?" adding a $10 sub to the cart; "do you deliver to
+Ladyville?" committing mode=delivery with address="Ladyville?" and then
+fast-tracking checkout past both questions) shipped without any test. Both
+guards — `isItemQuestion()` and `MODE_QUESTION_RE` — run BEFORE the AI and
+are pure, so they pin cleanly.
+
+Three fixtures added, each verified to fail against the pre-fix `index.js`.
+They assert on the CART and the SESSION FIELDS rather than on reply wording,
+because the reply is AI-generated: that keeps them honest in CI, where there
+is no Gemini key and the call fails outright. Each carries a control — a real
+order, and a real "deliver it to 123 Main St" — because a question filter
+that also swallowed genuine orders would be a worse bug than the one it
+fixed.
+
+Needed one more harness assertion, `expectFieldEquals`: `session.mode` and
+`session.address` both default to null, and `null <= 0` is true in JS, so the
+existing AtMost check would have passed whether or not the fields had been
+wrongly committed — exactly the property under test.
+
 ### The claims audit
 
 Every bug above turned out to be the same shape: a promise made in the copy

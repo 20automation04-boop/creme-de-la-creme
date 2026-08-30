@@ -1,0 +1,32 @@
+{
+  "name": "asking-about-an-item-must-never-add-it-to-the-cart",
+  "from": "19990000058",
+  "turns": [
+    { "in": "1", "expectStep": "menu" },
+    { "in": "1", "expectStep": "item" },
+
+    {
+      "in": "how much is the chicken & cheese sub?",
+      "expectStep": "item",
+      "expectCartLength": 0,
+      "expectReplyNotContains": "Added",
+      "comment": "Asking a price used to PUT THE ITEM IN THE CART and charge for it. findDirectMatches runs before the AI and only substring-matches an item name anywhere in the text, so no prompt wording could have prevented it -- isItemQuestion() has to catch the question ahead of the direct matcher. Asserted on the cart rather than the reply wording because the answer itself is AI-generated: this stays true even in CI, where there is no Gemini key and the call fails."
+    },
+
+    {
+      "in": "do you have oreo cheesecake?",
+      "expectStep": "item",
+      "expectCartLength": 0,
+      "expectReplyNotContains": "Added",
+      "comment": "Availability phrasing, same failure."
+    },
+
+    {
+      "in": "2 hot dogs",
+      "expectStep": "item",
+      "expectCartLength": 1,
+      "expectReplyContains": "Hot Dog",
+      "comment": "The control that matters: the guard must not eat REAL orders. A question filter that also blocks ordering would be a worse bug than the one it fixed."
+    }
+  ]
+}

@@ -1,0 +1,22 @@
+{
+  "name": "asking-about-an-item-in-spanish-must-never-add-it-either",
+  "from": "19990000059",
+  "turns": [
+    { "in": "2", "expectStep": "menu" },
+    { "in": "2", "expectStep": "item" },
+    { "listId": "item:2:1", "expectCartLength": 1 },
+
+    {
+      "in": "cuanto cuesta el mochaccino?",
+      "expectStep": "item",
+      "expectCartLength": 1,
+      "comment": "Cart must be unchanged at 1 -- the Mochaccino must NOT be appended. Accent-free 'cuanto' is how it actually gets typed on a phone."
+    },
+
+    {
+      "in": "tienen oreo cheesecake?",
+      "expectStep": "item",
+      "expectCartLength": 1
+    }
+  ]
+}

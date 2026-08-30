@@ -52,7 +52,7 @@ current value in both `DRIVER_NUMBERS` and `OWNER_NUMBERS`).
 2. Copy `.env.example` to `.env` and fill in real values (transferred
    separately/securely — never via git; see "Secrets" below).
 3. `node index.js` runs it locally. `npm test` runs the replay suite
-   (`node --test test/*.test.js`) — 102 tests covering the ordering FSM,
+   (`node --test test/*.test.js`) — 112 tests covering the ordering FSM,
    button routing, owner commands, the escalation ladder, and the dashboards.
    They use
    `BOT_DRY_RUN=1` (set by the test files themselves) so no real WhatsApp

@@ -166,6 +166,24 @@ for (const file of fixtureFiles) {
       if (turn.expectNoReply) {
         assert.equal(sent.length, 0, `${label}: expected no reply, got: ${replyText}`);
       }
+      // Exact value, including null. The AtLeast/AtMost pair above cannot
+      // express "this must still be unset": session.mode and session.address
+      // default to null, and `null <= 0` is true in JS, so an AtMost check
+      // would pass whether or not the field had been wrongly committed —
+      // which is precisely the property the delivery-question guard needs
+      // pinned. Compares with Object.is so null and undefined stay distinct.
+      // Takes one ["field", value] pair, or a list of them when a single
+      // reply has to leave several fields untouched at once.
+      if (turn.expectFieldEquals) {
+        const pairs = Array.isArray(turn.expectFieldEquals[0]) ? turn.expectFieldEquals : [turn.expectFieldEquals];
+        for (const [field, want] of pairs) {
+          const got = readSessionField(bot.sessions[from], field);
+          assert.ok(
+            Object.is(got, want),
+            `${label}: expected session.${field} to be ${JSON.stringify(want)}, got ${JSON.stringify(got)}`
+          );
+        }
+      }
       if (turn.expectFieldAtLeast) {
         const [field, min] = turn.expectFieldAtLeast;
         const got = readSessionField(bot.sessions[from], field);

@@ -1,0 +1,30 @@
+{
+  "name": "asking-whether-we-deliver-somewhere-must-not-commit-the-order-to-delivery",
+  "from": "19990000060",
+  "turns": [
+    { "in": "1", "expectStep": "menu" },
+    { "in": "1", "expectStep": "item" },
+    { "listId": "item:1:1", "expectCartLength": 1 },
+
+    {
+      "in": "do you deliver to Ladyville?",
+      "expectStep": "item",
+      "expectFieldEquals": [["mode", null], ["address", null]],
+      "expectReplyNotContains": "Delivery to:",
+      "comment": "This used to set mode='delivery' and address='Ladyville?', and because tryCheckout fast-tracks once BOTH are set, it then skipped straight past the pickup/delivery question AND the address question -- sending a real driver to a literal question mark. Step staying at 'item' proves there was no fast-track; the null fields prove nothing was committed."
+    },
+
+    {
+      "in": "how much is delivery to my house?",
+      "expectStep": "item",
+      "expectFieldEquals": [["mode", null], ["address", null]],
+      "comment": "Second question phrasing that carries both a delivery word and a place."
+    },
+
+    {
+      "in": "deliver it to 123 Main St",
+      "expectFieldEquals": [["mode", "delivery"], ["address", "123 Main St"]],
+      "comment": "The control, and the reason the guard keys off question FORM rather than just the delivery keyword: a genuine instruction to deliver somewhere still has to commit, or the fix would have broken one-message ordering entirely."
+    }
+  ]
+}
