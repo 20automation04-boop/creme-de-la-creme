@@ -114,6 +114,30 @@ Needed one more harness assertion, `expectFieldEquals`: `session.mode` and
 existing AtMost check would have passed whether or not the fields had been
 wrongly committed — exactly the property under test.
 
+### Webhook verification is OFF in production, and the comment about it lied
+
+`CHAKRA_WEBHOOK_SECRET` is set in the local `.env` but NOT in Railway, so the
+live `/whatsapp` endpoint does no signature verification at all. Since
+`isOwner()` trusts the `from` field in the payload, anyone who finds the URL
+can forge a webhook as the owner and run owner commands, or write orders into
+the Manager sheet as any customer.
+
+It is NOT fixed by just setting the variable. The block comment above
+`verifyChakraSignature` described the opposite of the code: it said a
+signature was verified when present but never required, which WAS true and
+was itself the hole (omitting the header bypassed verification). The code was
+tightened to reject unsigned requests; the comment was not updated, and for a
+while it recommended exactly the change that would take the bot offline --
+because it is unconfirmed whether Chakra signs the raw Meta pass-through
+shape this bot receives. Verified locally: with the secret set, an unsigned
+POST gets 403.
+
+The comment now says so, and the handler logs once per process whether the
+signature header actually arrived, only while the secret is unset and with no
+change in behaviour. One real message plus a grep of the Railway logs for
+"Webhook signature header" turns the decision into evidence instead of a
+coin flip.
+
 ### The claims audit
 
 Every bug above turned out to be the same shape: a promise made in the copy

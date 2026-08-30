@@ -780,14 +780,35 @@ app.use(bodyParser.json({
 // Admin > Team > Secrets in the Chakra dashboard. Set that same value as
 // CHAKRA_WEBHOOK_SECRET below to enforce it.
 // NOTE: Chakra's docs describe this for their own "Chakra Events Webhook"
-// format — it's unconfirmed whether the header is also attached to the raw
+// format — it is UNCONFIRMED whether the header is also attached to the raw
 // Meta pass-through webhook this bot uses (see the GET /whatsapp handler
-// below). So this verifies the signature WHEN PRESENT and rejects a
-// mismatch, but does not require it — that avoids locking out real traffic
-// if pass-through mode turns out not to send it. Check your server logs
-// after deploying; if you see "signature verified" on real inbound
-// messages, it's working and you can tighten this to require it.
+// below).
+//
+// READ THIS BEFORE SETTING THE SECRET. Setting CHAKRA_WEBHOOK_SECRET is not
+// a safe no-op: with it set, an UNSIGNED request is rejected outright (see
+// verifyChakraSignature). So if pass-through mode turns out not to sign,
+// setting it rejects every real customer message and the bot goes silent
+// with nothing but 403s in the log.
+//
+// (An earlier version of this comment said the opposite — that a signature
+// was verified when present but never required. That WAS the behaviour, and
+// it was a hole: omitting the header bypassed verification entirely. The
+// code was tightened; this comment was not, and for a while it advised
+// exactly the change that would have taken the bot down.)
+//
+// To find out which case you are in, WITHOUT risking an outage: deploy with
+// the secret still unset and send one real WhatsApp message. The handler
+// logs, once per process, whether the signature header was present —
+// grep the Railway logs for "Webhook signature header". If it says present,
+// setting the secret is safe. If it says absent, do not set it; Chakra is
+// not signing this webhook shape and enforcement would only break delivery.
 const CHAKRA_WEBHOOK_SECRET = process.env.CHAKRA_WEBHOOK_SECRET;
+
+// Answers the one question you need before enabling enforcement: does Chakra
+// actually sign THIS webhook shape? Logged once per process (a single real
+// inbound message is enough), only while the secret is unset, and it changes
+// no behaviour — purely a read of whether the header arrived.
+let loggedSignaturePresence = false;
 
 function verifyChakraSignature(req) {
   const signature = req.get('X-Chakra-Signature-256');
@@ -3759,6 +3780,15 @@ app.post('/whatsapp', async (req, res) => {
   if (sigResult === false) {
     console.warn('Webhook signature mismatch — rejecting request.');
     return res.sendStatus(403);
+  }
+  // sigResult === null means no secret is configured, i.e. this deployment
+  // has verification OFF. Report once whether the header was there anyway,
+  // so the decision to turn it on is based on evidence instead of a guess.
+  if (sigResult === null && !loggedSignaturePresence) {
+    loggedSignaturePresence = true;
+    console.log(req.get('X-Chakra-Signature-256')
+      ? 'Webhook signature header IS PRESENT on inbound webhooks — Chakra is signing, so setting CHAKRA_WEBHOOK_SECRET is safe and will enforce it.'
+      : 'Webhook signature header is ABSENT on inbound webhooks — Chakra is NOT signing this shape. Do NOT set CHAKRA_WEBHOOK_SECRET: it would reject every real message. See the WEBHOOK SIGNATURE VERIFICATION block in index.js.');
   }
 
   const message = extractInboundMessage(req);
